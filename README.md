@@ -54,7 +54,104 @@ if (OnlineSubsystem)
 }
 ```
 </br>
+
+![steamSession](https://github.com/user-attachments/assets/fa0af67e-fd81-48ee-bf1f-458c775ab9ba)
+
+</br>
 OnlineSubsystem 인터페이스에 액세스하고 인터페이스가 제공하는 함수를 이용해 지금 사용하는 Subsystem의 이름을 알아와 화면에 보여주고 있다.</br>
 테스트를 하면서 이상한 점이 있었는데, 에디터에서 리슨 서버와 데디케이트 서버 방식으로 했을 때는 NULL이라고 떴는데, 패키징 이후 게임을 실행하니 Steam이라고 떴다.</br>
 GetSessionInterface() 함수는 IOnlineSessionPtr 타입을 리턴하는데 받아주는 변수 OnlineSessionInterface는 IOnlineSessionPtr 타입으로 선언하면 안됐다.</br>
 IOnlineSessionPtr이 typedef타입으로 선언되어 있어, <strong>TSharedPtr&lt;class IOnlineSession, ESPMode::ThreadSafe></strong> 타입으로 선언해줘야 했다.</br>
+
+델리게이트는 모든 함수에 대한 레퍼런스를 갖는 오브젝트라고 생각할 수 있다.</br>
+델리게이트는 함수를 바인딩하고, 바인딩 된 함수는 델리게이트가 브로드캐스트하는 것을 받고 응답할 수 있다.</br>
+보통 콜백 함수를 델리게이트에 바인딩하고 게임에서 특정 사건이 발생하면 델리게이트가 Fired되거나 브로드캐스트되고 해당 델리게이트에 바인딩 된 함수들은 호출된다.</br></br>
+
+CreateSession() 함수를 호출하면 정보가 stema으로 전송되고 게임 세션이 생성된다.</br>
+스팀에서는 컴퓨터로 정보를 다시 보내주는데 게임 세션이 생성되었다는 알림을 보낸다.</br>
+알림을 보낸다는 거에서 눈치를 챘을 수도 있지만, 세션 인터페이스는 델리게이트를 사용해야한다.</br>
+델리게이트를 사용하기 위해 델리게이트 리스트를 만들어 적절한 이벤트에 실행해야한다.</br>
+
+```
+protected:
+	UFUNCTION(BlueprintCallable)
+	void CreateGameSession();
+
+	void OnCreateSessionComplete(FName SessionName, bool bWasSuccessful);
+
+private:
+
+	FOnCreateSessionCompleteDelegate CreateSessionCompleteDelegate;
+```
+
+CreateGameSession은 게임 세션을 만드는 함수로 블루프린트에서 호출될 수 있도록 제작했다. 이렇게하면 BP_Player에서 키보드 이벤트에 해당 함수를 연결시키면 C++로 만든 함수가 실행된다.</br>
+중요한 것은 밑에 코드로 델리게이트와 델리게이트와 바인딩 할 함수를 선언했다.</br>
+OnCreateSessionComplete는 델리게이트와 바인딩 될 함수로 매개변수는 FOnCreateSessionCompleteDelegate에 맞춰서 작성했다.</br>
+```
+DECLARE_MULTICAST_DELEGATE_TwoParams(FOnCreateSessionComplete, FName, bool);
+```
+FOnCreateSessionCompleteDelegate의 정의로 이동하면 해당 델리게이트에 맞는 매개변수를 확인할 수 있다.</br>
+델리게이트와 콜백 함수를 선언했으면 둘을 바인딩해줘야한다. 이는 Player 생성자에서 바인딩해준다.
+
+```
+AMenuSystemCharacter::AMenuSystemCharacter() : 
+	CreateSessionCompleteDelegate(FOnCreateSessionCompleteDelegate::CreateUObject(this, &ThisClass::OnCreateSessionComplete))
+{
+	...
+}
+```
+
+CreateUObject는 클래스 멤버 함수를 델리게이트에 바인딩하는 데 사용되는 정적 메서드로 Player 객체를 넣고 바인딩할 함수를 적어주면 바인딩 절차가 끝나게 된다.</br>
+여기서 ThisClass는 언리얼 엔진에서 제공하는 문법으로 간혹 현재 클래스 이름이 너무 길거나 난잡할때 ThisClass로 대체하여 작성할 수 있다.</br>
+
+```
+void AMenuSystemCharacter::CreateGameSession()
+{
+	if (!OnlineSessionInterface.IsValid())
+	{
+		return;
+	}
+
+	auto ExistingSession = OnlineSessionInterface->GetNamedSession(NAME_GameSession);
+	if (ExistingSession != nullptr)
+	{
+		OnlineSessionInterface->DestroySession(NAME_GameSession);
+	}
+
+	// 델리게이트 리스트에 추가
+	OnlineSessionInterface->AddOnCreateSessionCompleteDelegate_Handle(CreateSessionCompleteDelegate);
+
+	TSharedPtr<FOnlineSessionSettings> SessionSettings = MakeShareable(new FOnlineSessionSettings());
+	SessionSettings->bIsLANMatch = false;
+	.
+	.
+	.
+	const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
+	OnlineSessionInterface->CreateSession(*LocalPlayer->GetPreferredUniqueNetId(), NAME_GameSession, *SessionSettings);
+
+}
+```
+
+CreateGameSession 함수가 호출되면 세션 인터페이스가 있는지 확인하고 이미 만들어진 세션이 있는지 체크하여 있으면 기존 세션을 삭제해준다.</br>
+델리게이트 리스트에 만든 델리게이트를 추가하여 세션 생성이 완료될 때 호출될 수 있도록한다.</br>
+그 후 세션의 세팅을 설정해주고 플레이어의 고유 네트워크 ID를 가져와 세션 생성을 요청한다.</BR>
+
+```
+void AMenuSystemCharacter::OnCreateSessionComplete(FName SessionName, bool bWasSuccessful)
+{
+	if (bWasSuccessful)
+	{
+		if (GEngine)
+		{
+			GEngine->AddOnScreenDebugMessage(
+				-1,
+				15.f,
+				FColor::Blue,
+				FString::Printf(TEXT("Created session: %s"), *SessionName.ToString())
+			);
+		}
+	}
+ }
+```
+
+세션 생성이 완료되면 델리게이트를 통해 콜백 함수인 OnCreateSessionComplete함수가 호출된다. 함수가 하는 일은 간단한 디버그 메시지 출력이다.</br>
