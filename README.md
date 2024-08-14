@@ -155,3 +155,62 @@ void AMenuSystemCharacter::OnCreateSessionComplete(FName SessionName, bool bWasS
 ```
 
 세션 생성이 완료되면 델리게이트를 통해 콜백 함수인 OnCreateSessionComplete함수가 호출된다. 함수가 하는 일은 간단한 디버그 메시지 출력이다.</br>
+
+![createSession](https://github.com/user-attachments/assets/67cb84a1-c034-462c-8875-db9b8fb6e05b)
+
+</br>
+세션을 생성했으면 이제 해당 세션에 접속할 준비를 해야한다. 우선적으로 내가 원하는 세션을 찾을 필요가 있다.</br>
+세션을 찾는 것도 세션 인터페이스에서 함수를 제공하며, 세션을 찾았다면 델리게이트를 통해 콜백 함수를 호출할 것이다.</br>
+델리게이트 생성과 바인딩은 세션 생성과 거의 유사하니, 세션을 찾는 함수를 세세히 살펴보겠다.</br>
+
+```
+void AMenuSystemCharacter::JoinGameSession()
+{
+	// 게임 세션 찾기
+	if (!OnlineSessionInterface)
+		return;
+
+	// 델리게이트 설정
+	OnlineSessionInterface->AddOnFindSessionsCompleteDelegate_Handle(FindSessionCompleteDelegate);
+
+	SessionSearch = MakeShareable(new FOnlineSessionSearch());
+	SessionSearch->MaxSearchResults = 10000; 
+	SessionSearch->bIsLanQuery = false;
+	SessionSearch->QuerySettings.Set(SEARCH_PRESENCE, true, EOnlineComparisonOp::Equals);
+
+	const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
+	OnlineSessionInterface->FindSessions(*LocalPlayer->GetPreferredUniqueNetId(), SessionSearch.ToSharedRef());
+}
+```
+델리게이트 설정까지 세션 생성 함수와 크게 다르지 않다. 중요하게 볼 것은 SessionSearch이다.</br>
+세션 인터페이스의 함수 FindSessions를 실행하면 조건에 만족하는 세션을 얻어오는데 해당 세션들이 저장되는 곳이 SessionSearch이다.</br>
+또한 검색할 세션들의 조건을 거는 것도 SessionSearch에다가 세팅을 해준다.</br>
+우선 검색할 세션의 조건을 적고 세션 인터페이스의 함수 FindSessions에 입력해준다.</br>
+여기서 ToSharedRef가 붙은 이유는 SessionSearh 변수의 타입이 TSharedPtr<FOnlineSessionSearch>이기 때문이다.</br>
+
+```
+void AMenuSystemCharacter::OnFindSessionComplete(bool bWasSuccessful)
+{
+	for (auto Result : SessionSearch->SearchResults)
+	{
+		FString Id = Result.GetSessionIdStr();
+		FString User = Result.Session.OwningUserName;
+		
+		if (GEngine)
+		{
+			GEngine->AddOnScreenDebugMessage(
+				-1,
+				15.f,
+				FColor::Cyan,
+				FString::Printf(TEXT("Id: %s, User: %s"), *Id, *User)
+			);
+		}
+	}
+}
+```
+
+FindSession이 완료되면 델리게이트를 통해 콜백 함수인 OnFindSessionComplete가 호출된다.</br>
+위에서 SessionSearch 변수가 찾은 세션들의 저장한다고 했는데, 세션들의 저장공간이 SearchResults 변수이다.</br>
+SearchResults의 타입은 TArray<FOnlineSessionSearchResult>로 배열 타입이므로 for문을 통해 찾아낸 세션들을 하나씩 살펴본다.</br>
+
+
