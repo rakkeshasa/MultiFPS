@@ -291,3 +291,7 @@ void AMenuSystemCharacter::OnJoinSessionComplete(FName SessionName, EOnJoinSessi
 호스트의 IP를 얻어오는 방법은 세션 인터페이스가 제공하는 함수를 이용하는 것이다.</BR>
 GerResolvedConnectString을 통해 호스트의 IP주소를 Address 변수에 저장하고 ClientTravel을 통해 호스트 IP 세션에 접속할 수 있도록 한다.</BR>
 
+![join](https://github.com/user-attachments/assets/7b09eed2-cbd5-4b23-b4c0-ff540675deb9)
+
+</br>
+
