@@ -173,9 +173,6 @@ void AMenuSystemCharacter::JoinGameSession()
 	// 델리게이트 설정
 	OnlineSessionInterface->AddOnFindSessionsCompleteDelegate_Handle(FindSessionCompleteDelegate);
 
-	SessionSearch = MakeShareable(new FOnlineSessionSearch());
-	SessionSearch->MaxSearchResults = 10000; 
-	SessionSearch->bIsLanQuery = false;
 	SessionSearch->QuerySettings.Set(SEARCH_PRESENCE, true, EOnlineComparisonOp::Equals);
 
 	const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
@@ -213,4 +210,84 @@ FindSession이 완료되면 델리게이트를 통해 콜백 함수인 OnFindSes
 위에서 SessionSearch 변수가 찾은 세션들의 저장한다고 했는데, 세션들의 저장공간이 SearchResults 변수이다.</br>
 SearchResults의 타입은 TArray<FOnlineSessionSearchResult>로 배열 타입이므로 for문을 통해 찾아낸 세션들을 하나씩 살펴본다.</br>
 
+![JoinSession](https://github.com/user-attachments/assets/ba5ce202-b65c-4593-89e3-9762d04b342b)
+
+</br>
+
+세션을 찾았으면 이제 해당 세션에 접속할 차례다.</br>
+세션을 생성할 호스트를 위해 테스트용 맵인 Lobby를 하나 생성하고, Listen 서버로 서버를 열려고 한다.</br>
+또한 세션에 접속을 했으면 델리게이트를 통해 콜백 함수를 호출할 예정이니 세션 접속용 델리게이트와 콜백 함수를 생성한다.</br>
+
+```
+void AMenuSystemCharacter::CreateGameSession()
+{
+	...
+	SessionSettings->Set(FName("MatchType"), FString("FreeForAll"), EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
+	...
+}
+
+void AMenuSystemCharacter::OnCreateSessionComplete(FName SessionName, bool bWasSuccessful)
+{
+	if (bWasSuccessful)
+	{
+		UWorld* World = GetWorld();
+		if (World)
+		{
+			// 세션을 생성하자 마자 로비 맵으로 리슨 서버를 연다.
+			World->ServerTravel(FString("/Game/ThirdPerson/Maps/Lobby.umap?listen"));
+		}
+	}
+}
+```
+
+찾은 세션들 중 특정 세션과 연결하기 위해 매치 타입을 일치시켜야한다.</br>
+그러기 위해서는 세션을 생성할 때 매치 타입을 지정해줘야하는데 CreateGameSession함수에서 매치 타입의 Key 값은 'MatchType'으로 Value 값은'FreeForAll' 로 정해줬다.</br>
+세션 생성이 완료되면 델리게이트를 통해 OnCreateSessionComplete 콜백 함수가 호출되고 ServerTravel를 통해 Lobby 맵이 리슨 서버 형식으로 열리도록 한다.</br>
+
+```
+void AMenuSystemCharacter::OnFindSessionComplete(bool bWasSuccessful)
+{
+	for (auto Result : SessionSearch->SearchResults)
+	{
+		FString Id = Result.GetSessionIdStr();
+		FString User = Result.Session.OwningUserName;
+		FString MatchType;
+		Result.Session.SessionSettings.Get(FName("MatchType"), MatchType);
+
+		if (MatchType == FString("FreeForAll"))
+		{
+			OnlineSessionInterface->AddOnJoinSessionCompleteDelegate_Handle(JoinSessionCompleteDelegate);
+
+			const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
+			OnlineSessionInterface->JoinSession(*LocalPlayer->GetPreferredUniqueNetId(), NAME_GameSession, Result);
+		}
+	}
+}
+```
+
+세션 생성에 대한 수정이 완료됐다면 세션 찾는 것도 이제 매치 타입을 따져봐야한다.</br>
+세션 검색을 하면 조건을 만족하는 세션들은 SessionResults 배열로 저장이 된다고 했다.</br>
+배열에서 세션을 하나씩 살펴보면서 각 세션의 세팅을 확인해 매치 타입의 값이 어떻게 되는지 확인한다.</br>
+세션 생성당시 SessionSettings의 Set을 이용해 매치 타입을 지정해줬고, 세션 검색시 Get을 통해 매치 타입의 값을 가져오고 있다.</br>
+매치 타입의 값이 맞다면 세션에 입장할 차례다.</br.
+
+```
+void AMenuSystemCharacter::OnJoinSessionComplete(FName SessionName, EOnJoinSessionCompleteResult::Type Result)
+{
+	// IP 주소를 얻어 합류하기
+
+	FString Address;
+	if (OnlineSessionInterface->GetResolvedConnectString(NAME_GameSession, Address))
+	{
+		APlayerController* PlayerController = GetGameInstance()->GetFirstLocalPlayerController();
+		if (PlayerController)
+		{
+			PlayerController->ClientTravel(Address, ETravelType::TRAVEL_Absolute);
+		}
+	}
+}
+```
+세션에 접속하기 위해 호스트의 IP를 알아야한다.</BR>
+호스트의 IP를 얻어오는 방법은 세션 인터페이스가 제공하는 함수를 이용하는 것이다.</BR>
+GerResolvedConnectString을 통해 호스트의 IP주소를 Address 변수에 저장하고 ClientTravel을 통해 호스트 IP 세션에 접속할 수 있도록 한다.</BR>
 
