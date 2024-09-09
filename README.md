@@ -503,7 +503,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMultiplayerOnDestroySessionComplete
 여기서 MULTICAST와 DYNAMIC 옵션을 확인 할 수 있는데 각각에 대해 설명하자면</BR>
 MULTICAST : 브로드캐스트가 되면 다수의 클래스가 기능을 바인딩할 수 있다 </BR>
 DYNAMIC : 델리게이트를 직렬화할 수 있고 블루프린트 그래프에서 로드될 수 있다 </BR>
-이며 DYNAMIC의 경우 바인딩할 변수의 타입과 이름을 따로 따로 작성해야하며, 다이나믹 델리게이트와 바인딩하는 함수는 UFUCTION으로 선언된 함수여야하는 룰이 있다.</BR></BR>
+이며 DYNAMIC의 경우 바인딩할 변수의 타입과 이름을 따로 따로 작성해야하며, 다이나믹 델리게이트와 바인딩하는 함수는 <STRONG>UFUCTION</STRONG>으로 선언된 함수여야하는 룰이 있다.</BR></BR>
 
 이렇게 커스텀 델리게이트를 생성하고 CreateSession함수에서 해당 델리게이트를 통해 알맞은 값을 넣어 Menu 클래스에 통보해주면 된다.</br>
 Menu 클래스에서는 OnCreateSession과 같은 콜백 함수를 생성해줬다.</br>
