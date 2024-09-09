@@ -295,3 +295,213 @@ GerResolvedConnectString을 통해 호스트의 IP주소를 Address 변수에 �
 
 </br>
 
+## 버튼에 연동하기
+Steam을 이용하여 여러 플레이어가 하나의 세션에 모여 같이 플레이할 수 있는 것을 확인했다.</br>
+이제 세션 생성과 세션 참가를 버튼을 통해 할 수 있도록 할 것이다.</br>
+안그러면 어느 플레이어가 세션을 생성할지(리슨 서버) 알 수 없기 때문이다.</br>
+위에서는 언리얼에서 제공하는 플레이어 블루브린트에 1,2,3 키 이벤트를 사용하여 세션을 생성하고 참가했다.</br>
+이번에는 게임에서 보이는 '게임 참가', '방 만들기'와 같은 버튼을 UI상에서 직접적으로 보여주기 위해 위젯 블루프린트를 사용했다.</BR></BR>
+
+![wbp](https://github.com/user-attachments/assets/4ec34cd5-3ee6-49d5-98e2-46870d6872f5)
+<div align="center"><strong>UI에 적용할 위젯 블루프린트</strong></div></BR>
+
+</br>
+위젯 블루프린트에 있는 버튼과 C++로 만든 세션관련 함수를 연동하기 위해 UserWidget을 상속받는 Menu 클래스를 생성했다.</br>
+
+```
+UCLASS()
+class MULTIPLAYERSESSIONS_API UMenu : public UUserWidget
+{
+	GENERATED_BODY()
+
+private:
+	// BindWidget을 하면 WBP상의 버튼 위젯과 연결된다.
+	UPROPERTY(meta = (BindWidget))
+	class UButton* HostButton;
+
+	UPROPERTY(meta = (BindWidget))
+	UButton* JoinButton;
+
+	UFUNCTION()
+	void HostButtonClicked();
+
+	UFUNCTION()
+	void JoinButtonClicked();
+
+	class UMultiplayerSessionsSubsystem* MultiplayerSessionsSubsystem;
+};
+```
+
+재밌는 주의점은 위젯 블루프린트에서 생성한 버튼 이름과 Menu 클래스에서 생성한 버튼 이름이 같아야한다는 것이다.</br>
+이름을 일치시키고 ```UPROPERTY(meta = (BindWidget))``` 를 통해 위젯 블루프린트의 버튼과 연결시킨다.</br></br>
+
+<strong>HostButtonClicked</strong>와 <strong>JoinButtonClicked</strong>은 함수명에서 예측할 수 있듯이 버튼이 눌리면 델리게이트를 통해 호출될 함수이다.</br>
+델리게이트와 연동하기 위해 ```UFUNCTION()``` 속성을 적용했다.</BR></BR>
+
+```
+bool UMenu::Initialize()
+{
+	if (!Super::Initialize())
+	{
+		return false;
+	}
+
+	// 버튼 클래스에 존재하는 델리게이트
+	if (HostButton)
+	{
+		HostButton->OnClicked.AddDynamic(this, &ThisClass::HostButtonClicked);
+	}
+	if (JoinButton)
+	{
+		JoinButton->OnClicked.AddDynamic(this, &ThisClass::JoinButtonClicked);
+	}
+
+	return true;
+}
+```
+
+Initialize 함수는 오버라이딩된 함수로 BeginPlay의 위젯 블루프린트 버전이다.</br>
+버튼을 이용한 델리게이트 이벤트는 많은 게임에서 사용하고 버튼을 누르면 어디론가 신호를 보내야하기에 엔진에서 기본적으로 델리게이트에 관한 함수를 제공한다.
+Button 클래스에 있는 OnClicked 함수는 버튼이 눌렸을 때 호출되는 함수로 AddDynamic을 통해 OnClicked가 호출되었을 때 콜백할 함수를 바인딩해준다.</br>
+
+```
+void UMenu::HostButtonClicked()
+{
+	HostButton->SetIsEnabled(false);
+	if (MultiplayerSessionsSubsystem)
+	{
+		MultiplayerSessionsSubsystem->CreateSession(NumPublicConnections, MatchType);
+	}
+}
+
+void UMenu::JoinButtonClicked()
+{
+	JoinButton->SetIsEnabled(false);
+	if (MultiplayerSessionsSubsystem)
+	{
+		MultiplayerSessionsSubsystem->FindSession(10000);
+	}
+}
+```
+
+버튼에서 Onclicked 이벤트가 발생하면 콜백될 함수들은 OnlineSubsystem 챕터에서 봤던 세션 생성과 세션 찾기 함수를 호출한다.</br>
+세션 관련 함수는 더 이상 플레이어 블루프린트에서 작동하지 않고 Menu 시스템에서 호출되도록 만들것이기 때문에 Character를 상속한 클래스에 있으면 안된다.</br></br>
+
+세션관련 함수가 포함될 클래스는 더 이상 Character가 아닌 다른 무언가를 부모로 취해야한다.</br>
+여기서 적합한 부모 클래스가 </strong>GameInstance 클래스</strong>이다.</br>
+게임 인스턴스는 게임이 생성되고 게임이 종료될 때까지 소멸되지 않고, 다른 레벨 간에도 동일한 인스턴스가 유지되므로 부모로 적합한 클래스다.</br>
+문제점은 게임 인스턴스는 넓은 영역을 관할는 엔진 클래스로 멀티플레이어 세션 기능이나, 캐릭터 클래스와 같은 다양한 클래스와 메소드를 포함한다는 것이다.</br>
+이렇게 되면 해당 클래스를 컴파일 할때마다 프로그래밍 시간이 늘어나고, 엔진 클래스 오버라이드를 매번 체크해야한다는 단점이 있다.</br></br>
+
+언리얼엔진에서는 이러한 단점을 해결하기 위해 Subsystem이라는 자동 인스턴싱 클래스를 만들었다.</br>
+Subsystem 클래스는 쉬운 확정성을 제공하고, 블루프린트나 Python으로 클래스를 노출시켜 직관화가 가능하며 엔진 클래스의 오버라이드와 수정을 피할 수 있다.</br>
+Subsystem의 종류는 Engine, Editor, GameInstance, LocalPlayer로 총 4가지가 있고 여기서 GameInstanceSubsystem을 사용할 것이다.</br></br>
+
+둘의 연관성을 살펴보면</br>
+1. 게임 인스턴스가 생성된 후, 게임 인스턴스 서브시스템도 생성된다.
+2. 게임 인스턴스가 생성된 후 초기화 되면, 게임 인스턴스 서브시스템은 Initialize 함수를 호출해 초기화한다.
+3. 게임 인스턴스가 종료되면, 게임 인스턴스 서브시스템은 Deinitialize 함수가 호출된다.
+4. Deinitialize가 호출되면 게임 인스턴스 서브시스에 대한 참조가 삭제되고, 더 이상의 참조가 없으면 가비지 컬렉션된다.
+
+상속받은 클래스 간의 생성자와 소멸자가 작동하는 원리와 비슷해보인다.</br>
+이제 GameInstanceSubsystem을 통해 세션관련 함수를 관리할 것이다.</br>
+
+```
+UCLASS()
+class MULTIPLAYERSESSIONS_API UMultiplayerSessionsSubsystem : public UGameInstanceSubsystem
+{
+	GENERATED_BODY()
+	
+public:
+	UMultiplayerSessionsSubsystem();
+
+	void CreateSession(int32 NumPublicConnections, FString MatchType);
+	void FindSession(int32 MaxSearchResults);
+	void JoinSession(const FOnlineSessionSearchResult& SessionResult);
+	void DestroySession();
+	void StartSession();
+
+	FMultiplayerOnCreateSessionComplete MultiplayerOnCreateSessionComplete;
+	FMultiplayerOnFindSessionsComplete MultiplayerOnFindSessionsComplete;
+	FMultiplayerOnJoinSessionComplete MultiplayerOnJoinSessionComplete;
+	FMultiplayerOnDestroySessionComplete MultiplayerOnDestroySessionComplete;
+	FMultiplayerOnStartSessionComplete MultiplayerOnStartSessionComplete;
+
+protected:
+
+	//
+	// 델리게이트용 내부 콜백함수(세션 인터페이스 델리게이트 리스트)
+	//
+	void OnCreateSessionComplete(FName SessionName, bool bWasSuccessful);
+	void OnFindSessionsComplete(bool bWasSuccessful);
+	void OnJoinSessionComplete(FName SessionName, EOnJoinSessionCompleteResult::Type Result);
+	void OnDestroySessionComplete(FName SessionName, bool bWasSuccessful);
+	void OnStartSessionComplete(FName SessionName, bool bWasSuccessful);
+};
+```
+
+세션 관련 함수들의 이동이 완료되었다.</br>
+각 함수들의 내용은 Menu 클래스와 연동할 델리게이트 추가를 제외하면 MenuSystemCharacter 클래스에서 작성한 내용과 크게 다를바 없다.</br></br>
+
+최대한 중복된 부분은 생략하고 중요한 부분을 복기해보고자 한다.
+
+```
+UMultiplayerSessionsSubsystem::UMultiplayerSessionsSubsystem():
+	CreateSessionCompleteDelegate(FOnCreateSessionCompleteDelegate::CreateUObject(this, &ThisClass::OnCreateSessionComplete)),
+	FindSessionsCompleteDelegate(FOnFindSessionsCompleteDelegate::CreateUObject(this, &ThisClass::OnFindSessionsComplete)),
+	JoinSessionCompleteDelegate(FOnJoinSessionCompleteDelegate::CreateUObject(this, &ThisClass::OnJoinSessionComplete)),
+	DestroySessionCompleteDelegate(FOnDestroySessionCompleteDelegate::CreateUObject(this, &ThisClass::OnDestroySessionComplete)),
+	StartSessionCompleteDelegate(FOnStartSessionCompleteDelegate::CreateUObject(this, &ThisClass::OnStartSessionComplete))
+{
+	IOnlineSubsystem* Subsystem = IOnlineSubsystem::Get();
+	if (Subsystem)
+	{
+		SessionInterface = Subsystem->GetSessionInterface();
+	}
+}
+```
+생성자에서 모든 델리게이트에 대해 콜백할 함수 바인딩해주기.</br>
+처음에 봤을 때 생성자 함수 뒤로 저렇게 긴 줄이 여러개 작성되는게 가히 충격적이고 신선하여 쉽게 잊을 수 없는 코드였다.</br></br>
+
+
+```
+void UMultiplayerSessionsSubsystem::CreateSession(int32 NumPublicConnections, FString MatchType)
+{
+	auto ExistingSession = SessionInterface->GetNamedSession(NAME_GameSession);
+	if (ExistingSession != nullptr)
+	{
+		// 이미 세션이 존재한다면
+		bCreateSessionOnDestroy = true;
+		LastNumPublicConnections = NumPublicConnections;
+		LastMatchType = MatchType;
+
+		DestroySession();
+
+		SessionInterface->DestroySession(NAME_GameSession);
+	}
+
+	// FDelegateHandle에 델리게이트 저장
+	SessionInterface->AddOnCreateSessionCompleteDelegate_Handle(CreateSessionCompleteDelegate);
+
+	// 세션 세팅 관련 설정
+	LastSessionSettings = MakeShareable(new FOnlineSessionSettings());
+	.
+	.
+	.
+
+	const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
+	if (!SessionInterface->CreateSession(*LocalPlayer->GetPreferredUniqueNetId(), NAME_GameSession, *LastSessionSettings))
+	{
+		SessionInterface->ClearOnCreateSessionCompleteDelegate_Handle(CreateSessionCompleteDelegateHandle);
+	
+		// 커스텀 델리게이트에 브로드캐스트하기
+		MultiplayerOnCreateSessionComplete.Broadcast(false);
+	}
+
+}
+```
+세션 생성 함수로 기존과 다른 점은 이미 세션이 있는 경우에 또 세션 생성을 시도할 경우를 추가하였다.</br>
+보통 세션이 정상적으로 종료되지 않고 세션을 재생성할때를 가정하여 기존 세션을 삭제하도록 했다.</br></br>
+
+델리게이트 핸들에 사용할 델리게이트를 등록하고, 세션 인터페이스에서 CreateSession함수를 호출하여 세션을 생성하도록한다.</br>
+세션 생성에 실패할 시 델리게이트 핸들에서 델리게이트를 삭제하고 
