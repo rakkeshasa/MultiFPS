@@ -441,28 +441,8 @@ protected:
 ```
 
 세션 관련 함수들의 이동이 완료되었다.</br>
-각 함수들의 내용은 Menu 클래스와 연동할 델리게이트 추가를 제외하면 MenuSystemCharacter 클래스에서 작성한 내용과 크게 다를바 없다.</br></br>
-
-최대한 중복된 부분은 생략하고 중요한 부분을 복기해보고자 한다.
-
-```
-UMultiplayerSessionsSubsystem::UMultiplayerSessionsSubsystem():
-	CreateSessionCompleteDelegate(FOnCreateSessionCompleteDelegate::CreateUObject(this, &ThisClass::OnCreateSessionComplete)),
-	FindSessionsCompleteDelegate(FOnFindSessionsCompleteDelegate::CreateUObject(this, &ThisClass::OnFindSessionsComplete)),
-	JoinSessionCompleteDelegate(FOnJoinSessionCompleteDelegate::CreateUObject(this, &ThisClass::OnJoinSessionComplete)),
-	DestroySessionCompleteDelegate(FOnDestroySessionCompleteDelegate::CreateUObject(this, &ThisClass::OnDestroySessionComplete)),
-	StartSessionCompleteDelegate(FOnStartSessionCompleteDelegate::CreateUObject(this, &ThisClass::OnStartSessionComplete))
-{
-	IOnlineSubsystem* Subsystem = IOnlineSubsystem::Get();
-	if (Subsystem)
-	{
-		SessionInterface = Subsystem->GetSessionInterface();
-	}
-}
-```
-생성자에서 모든 델리게이트에 대해 콜백할 함수 바인딩해주기.</br>
-처음에 봤을 때 생성자 함수 뒤로 저렇게 긴 줄이 여러개 작성되는게 가히 충격적이고 신선하여 쉽게 잊을 수 없는 코드였다.</br></br>
-
+각 함수들의 내용은 Menu 클래스와 연동할 델리게이트 추가를 제외하면 MenuSystemCharacter 클래스에서 작성한 내용과 크게 다를바 없다.</br>
+유심히 봐야할 것은 Menu 클래스가 어떻게 세션 관련 함수들로부터 응답을 받는지에 대한 것이다.</br>
 
 ```
 void UMultiplayerSessionsSubsystem::CreateSession(int32 NumPublicConnections, FString MatchType)
@@ -500,8 +480,76 @@ void UMultiplayerSessionsSubsystem::CreateSession(int32 NumPublicConnections, FS
 
 }
 ```
-세션 생성 함수로 기존과 다른 점은 이미 세션이 있는 경우에 또 세션 생성을 시도할 경우를 추가하였다.</br>
+세션 생성 함수부터 살펴보면 기존 MenuCharacter 클래스의 함수와 다른 점은 이미 세션이 있는 경우에 또 세션 생성을 시도할 경우를 추가하였다.</br>
 보통 세션이 정상적으로 종료되지 않고 세션을 재생성할때를 가정하여 기존 세션을 삭제하도록 했다.</br></br>
 
-델리게이트 핸들에 사용할 델리게이트를 등록하고, 세션 인터페이스에서 CreateSession함수를 호출하여 세션을 생성하도록한다.</br>
-세션 생성에 실패할 시 델리게이트 핸들에서 델리게이트를 삭제하고 
+``` MultiplayerOnCreateSessionComplete.Broadcast(false) ``` 새로운 코드가 추가되었다.</br>
+MultiplayerSessionSubsystem 클래스는 Session Interface의 세션 관련 함수를 호출하고 델리게이트를 통해 콜백 함수를 호출하지만,
+Menu 클래스는 현재 ``` MultiplayerSessionSubsystem->CreateSession() ``` 을 해도 현재 정보를 얻어오지 못하고 있다.</br>
+이를 해결하기 위해 MultiPlayerSessionSubsystem 클래스에 커스텀 델리게이트를 생성하고 메뉴 클래스에서 콜백 함수를 생성한다.</br>
+즉 Menu 클래스가 CreateSession을 호출하면 MultiplayerSessionSubsystem 클래스가 Session Interface로 부터 응답을 받은 후 커스텀 델리게이트를 통해 Menu 클래스에도 응답을 보낸다.</br>
+그러기 위해 커스텀 델리게이트인 MultiplayerOnCreateSessionComplete를 사용했다.</br></br>
+
+커스텀 델리게이트 선언은 다음과 같다.</br>
+
+```
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMultiplayerOnCreateSessionComplete, bool, bWasSuccessful);
+DECLARE_MULTICAST_DELEGATE_TwoParams(FMultiplayerOnFindSessionsComplete, const TArray<FOnlineSessionSearchResult>& SessionResults, bool bWasSuccessful);
+DECLARE_MULTICAST_DELEGATE_OneParam(FMultiplayerOnJoinSessionComplete, EOnJoinSessionCompleteResult::Type Result);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMultiplayerOnDestroySessionComplete, bool, bWasSuccessful);
+```
+
+매개변수 순서는 지정할 델리게이트 이름, 델리게이트에 바인딩할 변수 타입, 바인딩할 변수 이름이다.</br>
+여기서 MULTICAST와 DYNAMIC 옵션을 확인 할 수 있는데 각각에 대해 설명하자면</BR>
+MULTICAST : 브로드캐스트가 되면 다수의 클래스가 기능을 바인딩할 수 있다 </BR>
+DYNAMIC : 델리게이트를 직렬화할 수 있고 블루프린트 그래프에서 로드될 수 있다 </BR>
+이며 DYNAMIC의 경우 바인딩할 변수의 타입과 이름을 따로 따로 작성하는 룰이 있다.</BR></BR>
+
+이렇게 커스텀 델리게이트를 생성하고 CreateSession함수에서 해당 델리게이트를 통해 알맞은 값을 넣어 Menu 클래스에 통보해주면 된다.</br>
+Menu 클래스에서는 OnCreateSession과 같은 콜백 함수를 생성해줬다.</br>
+
+```
+void UMenu::OnCreateSession(bool bWasSuccessful)
+{
+	if (bWasSuccessful)
+	{
+		UWorld* World = GetWorld();
+		if (World)
+		{
+			World->ServerTravel(PathToLobby);
+		}
+	}
+	else
+	{
+		HostButton->SetIsEnabled(true);
+	}
+}
+```
+콜백 함수인 OnCreateSession 함수가 할 일은 간단하다.</br>
+델리게이트로 넘어온 값이 true면 ServerTravel을 통해 다른 레벨로 넘어가도록 해주고 false면 호스트 버튼은 재활성화하여 호스트 버튼을 다시 누를 수 있게 한다.</br></br>
+
+커스텀 델리게이트도 생성하였고, 해당 델리게이트가 호출할 콜백 함수도 생성하였다.</br>
+문제점은 Menu 클래스에 해당 델리게이트를 연동시키는 것인데 Menu 클래스가 세팅해야할 변수와 델리게이트를 하나의 함수에서 세팅할 수 있도록 새로운 함수를 생성했다.</br>
+
+```
+void UMenu::MenuSetup(int32 NumberOfPublicConnections, FString TypeOfMatch, FString LobbyPath)
+{
+	UGameInstance* GameInstance = GetGameInstance();
+	if (GameInstance)
+	{
+		MultiplayerSessionsSubsystem = GameInstance->GetSubsystem<UMultiplayerSessionsSubsystem>();
+	}
+
+	if (MultiplayerSessionsSubsystem)
+	{
+		MultiplayerSessionsSubsystem->MultiplayerOnCreateSessionComplete.AddDynamic(this, &ThisClass::OnCreateSession);
+		MultiplayerSessionsSubsystem->MultiplayerOnFindSessionsComplete.AddUObject(this, &ThisClass::OnFindSessions);
+		MultiplayerSessionsSubsystem->MultiplayerOnJoinSessionComplete.AddUObject(this, &ThisClass::OnJoinSession);
+		MultiplayerSessionsSubsystem->MultiplayerOnDestroySessionComplete.AddDynamic(this, &ThisClass::OnDestroySession);
+	}
+}
+```
+
+MultiPlayerSessionSubsystem 클래스에 커스텀 델리게이트를 생성했으므로 해당 클래스를 이용해야한다.</br>
+MultiPlayerSessionSubsystem은 위에서 설명한거와 같이 GameInstance Subsystem을 부모로 갖는 클래스이고 GameInstance Subsystem은 GameInstance를 통해 가져올 수 있다.</br>
+클래스를 가져왔다면 커스텀 델리게이트에 AddDynamic과 AddUObject를 통해 Menu 클래스에 있는 콜백함수와 바인딩하여 Menu 클래스가 세션 관련 함수로부터 알림을 받을 수 있게한다.</br>
