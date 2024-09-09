@@ -552,4 +552,21 @@ void UMenu::MenuSetup(int32 NumberOfPublicConnections, FString TypeOfMatch, FStr
 
 MultiPlayerSessionSubsystem 클래스에 커스텀 델리게이트를 생성했으므로 해당 클래스를 이용해야한다.</br>
 MultiPlayerSessionSubsystem은 위에서 설명한거와 같이 GameInstance Subsystem을 부모로 갖는 클래스이고 GameInstance Subsystem은 GameInstance를 통해 가져올 수 있다.</br>
-클래스를 가져왔다면 커스텀 델리게이트에 AddDynamic과 AddUObject를 통해 Menu 클래스에 있는 콜백함수와 바인딩하여 Menu 클래스가 세션 관련 함수로부터 알림을 받을 수 있게한다.</br>
+클래스를 가져왔다면 커스텀 델리게이트에 AddDynamic과 AddUObject를 통해 Menu 클래스에 있는 콜백함수와 바인딩하여 Menu 클래스가 세션 관련 함수로부터 알림을 받을 수 있게한다.</br></br>
+
+커스텀 델리게이트가 true를 보내는 경우를 아직 살펴보지 못했다.</br>
+
+```
+void UMultiplayerSessionsSubsystem::OnCreateSessionComplete(FName SessionName, bool bWasSuccessful)
+{
+	if (SessionInterface)
+	{
+		SessionInterface->ClearOnCreateSessionCompleteDelegate_Handle(CreateSessionCompleteDelegateHandle);
+	}
+
+	MultiplayerOnCreateSessionComplete.Broadcast(bWasSuccessful);
+}
+```
+
+MultiplayerSessionSubsystem에서 Session Interface로 세션이 생성됐다는 알림을 받으면 OnCreateSessionComplete함수를 콜백하고,
+핸들을 초기화하고 Menu 클래스한테 true값을 보내준다.</br>
