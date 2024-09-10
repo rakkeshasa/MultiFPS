@@ -723,7 +723,62 @@ void UMenu::OnJoinSession(EOnJoinSessionCompleteResult::Type Result)
 	}
 }
 ```
+
 세션 인터페이스를 사용하기 위해 Online Subsystem이 필요하고, 이것은 MultiplayerSessionsSubsystem 클래스에 변수로 선언되어있지만 Private 영역에 있으므로 따로 얻어와야한다.</br>
 Online Subsystem을 얻어온 후 세션 인터페이스를 가져오고, 세션 인터페이스를 통해 호스트의 IP 주소를 알아낸다.</BR>
 Menu 클래스는 부모 클래스가 Pawn이나 Character가 아니기 때문에 바로 GetController을 할 수 없으므로 GameInstance로 부터 컨트롤러를 가져오고</br>
 ClientTravel을 통해 호스트 세션으로 최종적으로 접속하게 된다.</br>
+
+
+## 대기 레벨 만들기
+일정 인원이 모이면 게임이 시작되며 인원이 모이기 전까지는 게임이 시작되지 않고 일정 레벨에 대기하도록 하고자 한다.</BR>
+오버워치를 예를 들자면 캐릭터 픽창에서 다른 사람들을 기다리는 장면을 생각해볼 수 있다.</BR>
+
+![OVERWATCH](https://github.com/user-attachments/assets/df2c8567-398a-4213-bcf8-ff9a321a03a8)
+<div align="center"><strong>오버워치 게임에서 일정 인원이 채워질때까지 대기하는 화면</strong></div></BR>
+
+이 게임은 캐릭터가 하나이므로 오버워치같이 거창한 UI나 캐릭터 풀이 없고 배틀그라운드 마냥 하나의 맵에서 그냥 뛰어다닐수 있게 할 것이다.</BR>
+그러기 위해서는 우선 세션에 접속한 플레이어가 총 몇 명인지 파악할 수 있어야 한다.</BR></BR>
+
+몇 명인지 파악하기 위해서는 Game Mode와 Game State를 사용할 것이다.</br>
+게임 모드는 다른 레벨로 이동하거나 스폰 포인트 지정과 같은 게임의 모든 규칙을 세팅하는 것이고, 게임 스테이트는 게임 관련 정보를 저장하는 것이다.</br>
+여기서 게임 모드는 클라이언트가 게임에 접속하면 ```PostLogin(APlayerController* NewPlayer)```가 호출되고, 게임을 종료하면 ```Logout(AController* Exiting)``` 을 호출한다.</br>
+위 함수가 호출되면서 게임 스테이트는 PlayerState의 배열을 추가하거나 줄인다.</br>
+게임 모드는 게임 스테이트에 접근할 수 있고, PlayerState의 크기를 확인하면서 세션에 플레이어가 몇 명 있는지 확인할 수 있다.</br></br>
+
+대기 레벨에 적용할 게임 모드를 따로 생성하고 해당 게임 모드에서는 게임 스테이트에 있는 PlayerState의 배열의 크기를 확인할 것이다.</br>
+
+```
+void ALobbyGameMode::PostLogin(APlayerController* NewPlayer)
+{
+	Super::PostLogin(NewPlayer);
+
+	int32 NumberOfPlayers = GameState.Get()->PlayerArray.Num();
+	if (NumberOfPlayers == 2)
+	{
+		UWorld* World = GetWorld();
+		if (World)
+		{
+			// 게임 모드는 서버에만 존재하고 서버에서 호출하는 것이 확실하다
+			bUseSeamlessTravel = true; // 심리스 방식
+			World->ServerTravel(FString("/Game/Maps/BlasterMap?listen"));
+		}
+	}
+}
+```
+LobbyGameMode 클래스는 당연히 GameMode를 부모로 갖는 클래스로 PostLogin은 GameMode에 있는 함수로 오버라이딩됐다.</br>
+게임 모드는 게임 스테이트에 접근할 수 있으므로 다른 객체를 통하거나 다른 클래스를 선언할 필요 없이 게임 스테이트에 접근하여 PlayerArray 배열의 크기를 NumberOfPlayers 변수에 담는다.</br>
+일단 테스트환경이 열악하여 2명만 모이면 바로 대기 레벨에서 게임 레벨로 넘어가도록 했다.</br>
+만약 2명이 모였다면 심리스 방식으로 게임 레벨로 플레이어가 옮겨가게 했다.</br></br>
+
+```bUseSeamlessTravel = true``` 를 통해 어느정도 눈치 챘으리라 생각한다.</br>
+<strong>심리스 방식</strong>은 플레이어가 다른 레벨로 이동할 때 서버와의 연결을 끊지 않고 다른 레벨로 이동하는 방식이다.</br>
+만약 논심리스 방식으로 레벨을 이동한다면 클라이언트는 접속을 끊은 뒤 서버에 재연결하여 맵을 새로 로드해야하므로 게임이 멈추는 현상이 발생한다.</br>
+그러면 모두 심리스 방식으로 하는게 좋아보이지만 현실적으로 논심리스 방식이 적용되는 곳도 있다.</br>
+맵이 처음 로딩되거나, 서버에 처음 접속할 때, 새로운 게임을 실행할 때는 논심리스 방식이 적용된다.</br></br>
+
+심리스 방식으로 레벨을 이동하기 위해서는 중간 레벨인 <strong>전환 레벨(Transition Level)</strong>이 필요하다.</br>
+전환 레벨 없이 레벨을 이동하려면 항상 다른 레벨이 로드되어야 있어야하므로 메모리적으로 낭비이다.</br>
+이를 위해서 중간 레벨인 전환 레벨을 통해 상대적으로 작은 레벨에서 대기하면서 넘어갈 다음 레벨을 로드하는 방식이다.</br>
+RPG게임에서 오픈월드가 아닌 이상 볼 수 있는 로딩 창이 이러한 역할을 한다고 볼 수 있다.</BR>
+
