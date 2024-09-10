@@ -569,4 +569,161 @@ void UMultiplayerSessionsSubsystem::OnCreateSessionComplete(FName SessionName, b
 ```
 
 MultiplayerSessionSubsystem에서 Session Interface로 세션이 생성됐다는 알림을 받으면 OnCreateSessionComplete함수를 콜백하고,
-핸들을 초기화하고 Menu 클래스한테 true값을 보내준다.</br>
+핸들을 초기화하고 Menu 클래스한테 true값을 보내준다.</br></br>
+
+CreateSession까지 완료했으니 이제는 FindSession을 살펴볼 차례이다.</br>
+FindSession을 통해 찾은 세션들을 배열인 TArray에 넣고 이 배열을 델리게이트를 통해 Menu 클래스에 보내고자한다.</br>
+MenuCharacter에서 FindSession을 다룰 때, FinSession을 하면 검색 조건에 맞는 세션을 SearchResults에 담아주며 이 변수는 TArray<FOnlineSessionSearchResult> 타입이라고 한 차례 설명한적이 있다.</br>
+아쉽게도 SearchResults는 UCLASS나 UFUNCTION이 아니기 때문에 DYNAMIC 방식의 델리게이트를 사용하지 못한다.</BR>
+
+```
+DECLARE_MULTICAST_DELEGATE_TwoParams(FMultiplayerOnFindSessionsComplete, const TArray<FOnlineSessionSearchResult>& SessionResults, bool bWasSuccessful);
+DECLARE_MULTICAST_DELEGATE_OneParam(FMultiplayerOnJoinSessionComplete, EOnJoinSessionCompleteResult::Type Result);
+
+class MULTIPLAYERSESSIONS_API UMultiplayerSessionsSubsystem : public UGameInstanceSubsystem
+{
+	GENERATED_BODY()
+	
+public:
+	FMultiplayerOnFindSessionsComplete MultiplayerOnFindSessionsComplete;
+	FMultiplayerOnJoinSessionComplete MultiplayerOnJoinSessionComplete;
+}
+```
+
+따로 USTRUCT를 만들어서 조건에 맞는 세션들을 저장해 델리게이트를 DYNAMIC하게 만들 수 있지만 SearchResults가 굳이 블루프린트에 노출될 필요가 없다고 느껴 DYNAMIC 속성을 제외하고 델리게이트를 정의했다.</BR>
+JoinSession에서 얻는 EOnJoinSessionCompleteResult 또한 namespace일 뿐 언리얼엔진 구조체가 아닌 그냥 enum형 객체이므로 DYNAMIC을 적용할 수 없기에 속성을 제외하고 정의했다.</BR>
+이후 MultiplayerSessionsSubsystem 클래스에서 Menu 클래스가 해당 델리게이트를 사용하기 위해 public 영역에 델리게이트를 선언해준다.</br>
+그래야 Menu 클래스에서 MultiplayerSessionsSubsystem 클래스를 가져와서 델리게이트에 Menu 클래스의 콜백 함수를 바인딩 할 수 있기 때문이다.</br>
+
+```
+void UMenu::MenuSetup(int32 NumberOfPublicConnections, FString TypeOfMatch, FString LobbyPath)
+{
+	.
+	.
+	.
+
+	if (MultiplayerSessionsSubsystem)
+	{
+		MultiplayerSessionsSubsystem->MultiplayerOnCreateSessionComplete.AddDynamic(this, &ThisClass::OnCreateSession);
+		MultiplayerSessionsSubsystem->MultiplayerOnFindSessionsComplete.AddUObject(this, &ThisClass::OnFindSessions);
+		MultiplayerSessionsSubsystem->MultiplayerOnJoinSessionComplete.AddUObject(this, &ThisClass::OnJoinSession);
+	}
+}
+
+void UMenu::JoinButtonClicked()
+{
+	JoinButton->SetIsEnabled(false);
+	if (MultiplayerSessionsSubsystem)
+	{
+		MultiplayerSessionsSubsystem->FindSession(10000);
+	}
+}
+```
+
+콜백 함수인 OnFindSessions함수는 DYNAMIC 델리게이트에 바인딩 되는것이 아니기 때문에 UFUNCTION()타입이 필요 없다.</BR>
+또한 DYNAMIC 델리게이트가 아니므로 콜백함수와 바인딩을 할 때 AddUOject를 사용한다.</br></br>
+
+Menu 클래스에서 Join 버튼이 눌리면 MultiplayerSessionsSubsystem 클래스의 FindSession 함수를 호출할 것이다.</br>
+FindSession 함수는 Session Interface의 FindSessions을 통해 조건에 맞는 세션을 찾고 델리게이트를 통해 Menu 클래스에 응답해줄것이다.</br>
+
+```
+void UMultiplayerSessionsSubsystem::FindSession(int32 MaxSearchResults)
+{
+	FindSessionsCompleteDelegateHandle = SessionInterface->AddOnFindSessionsCompleteDelegate_Handle(FindSessionsCompleteDelegate);
+
+	LastSessionSearch = MakeShareable(new FOnlineSessionSearch());
+	LastSessionSearch->MaxSearchResults = MaxSearchResults;
+	LastSessionSearch->bIsLanQuery = IOnlineSubsystem::Get()->GetSubsystemName() == "NULL" ? true : false;
+	LastSessionSearch->QuerySettings.Set(SEARCH_PRESENCE, true, EOnlineComparisonOp::Equals);
+
+	const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
+	if (!SessionInterface->FindSessions(*LocalPlayer->GetPreferredUniqueNetId(), LastSessionSearch.ToSharedRef()))
+	{
+		SessionInterface->ClearOnFindSessionsCompleteDelegate_Handle(FindSessionsCompleteDelegateHandle);
+
+		MultiplayerOnFindSessionsComplete.Broadcast(TArray<FOnlineSessionSearchResult>(), false);
+	}
+}
+```
+
+MenuCharacter 클래스에서 구현했던 기능과 크게 차이 없고, MultioplayerSessionsSubsystem 클래스에서 구현한 CreateSession과 비슷하게 작성되었다.</br>
+세션 인터페이스에서 FindSessions를 실패하면 델리게이트 핸들을 삭제하고 빈 TArray와 세션 찾기에 실패했다는 의미의 false를 보낸다.</br>
+FindSessions에 성공했다면 MultiplayerSessionsSubsystem 클래스의 콜백함수인 OnFindSessions가 호출될 것이다.</br>
+
+```
+void UMultiplayerSessionsSubsystem::OnFindSessionsComplete(bool bWasSuccessful)
+{
+	// 세션을 성공적으로 찾았을 시 델리게이트 삭제
+	if (SessionInterface)
+	{
+		SessionInterface->ClearOnFindSessionsCompleteDelegate_Handle(FindSessionsCompleteDelegateHandle);
+	}
+
+	if (LastSessionSearch->SearchResults.Num() <= 0)
+	{
+		MultiplayerOnFindSessionsComplete.Broadcast(TArray<FOnlineSessionSearchResult>(), false);
+		return;
+	}
+
+	MultiplayerOnFindSessionsComplete.Broadcast(LastSessionSearch->SearchResults, bWasSuccessful);
+}
+```
+FindSessions에 성공했다면 델리게이트 핸들을 삭제하고 찾은 세션이 있는지 확인하기 위해 배열의 크기를 확인한다.</br>
+아쉽게도 세션을 하나도 못 찾았다면 실패한것과 다름 없으므로 빈 배열과 false를 델리게이트를 통해 Menu 클래스에 보낸다.</br>
+만약 세션을 1개 이상 찾았다면, SearchResults를 그대로 델리게이트에 실어서 Menu 클래스에 응답하게 된다.</br>
+
+```
+void UMenu::OnFindSessions(const TArray<FOnlineSessionSearchResult>& SessionResults, bool bWasSuccessful)
+{
+	for (auto Result : SessionResults)
+	{
+		FString SettingsValue;
+		Result.Session.SessionSettings.Get(FName("MatchType"), SettingsValue);
+		if (SettingsValue == MatchType)
+		{
+			MultiplayerSessionsSubsystem->JoinSession(Result);
+			return;
+		}
+	}
+
+	if (!bWasSuccessful || SessionResults.Num() == 0)
+	{
+		JoinButton->SetIsEnabled(true);
+	}
+}
+```
+Menu 클래스에서는 델리게이트를 통해 받은 응답으로 SessionResult의 내용물들을 하나씩 살펴보며 MatchType과 같은 세션이 있는지 확인하고 같다면 JoinSession을 호출하여 세션에 합류하는 단계로 넘어간다.</br>
+만약 세션 찾기에 실패하면 Join 버튼이 다시 활성화 된다.</br></br>
+
+JoinSession도 CreateSession과 FindSessions와 같은 흐름으로 진행되므로 따로 살펴보지 않고 Menu 클래스에서 어떻게 처리하는지만 살펴보겠다.</br>
+
+```
+void UMenu::OnJoinSession(EOnJoinSessionCompleteResult::Type Result)
+{
+	IOnlineSubsystem* Subsystem = IOnlineSubsystem::Get();
+	if (Subsystem)
+	{
+		IOnlineSessionPtr SessionInterface = Subsystem->GetSessionInterface();
+		if (SessionInterface.IsValid())
+		{
+			FString Address;
+			SessionInterface->GetResolvedConnectString(NAME_GameSession, Address);
+
+			APlayerController* PlayerController = GetGameInstance()->GetFirstLocalPlayerController();
+			if (PlayerController)
+			{
+				PlayerController->ClientTravel(Address, ETravelType::TRAVEL_Absolute);
+			}
+		}
+	}
+
+	if (Result != EOnJoinSessionCompleteResult::Success)
+	{
+		JoinButton->SetIsEnabled(true);
+	}
+}
+```
+세션 인터페이스를 사용하기 위해 Online Subsystem이 필요하고, 이것은 MultiplayerSessionsSubsystem 클래스에 변수로 선언되어있지만 Private 영역에 있으므로 따로 얻어와야한다.</br>
+Online Subsystem을 얻어온 후 세션 인터페이스를 가져오고, 세션 인터페이스를 통해 호스트의 IP 주소를 알아낸다.</BR>
+Menu 클래스는 부모 클래스가 Pawn이나 Character가 아니기 때문에 바로 GetController을 할 수 없으므로 GameInstance로 부터 컨트롤러를 가져오고</br>
+ClientTravel을 통해 호스트 세션으로 최종적으로 접속하게 된다.</br>
