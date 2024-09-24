@@ -948,3 +948,38 @@ SetOverlappingWeapon까지는 서버환경에서 작동하고 <strong>총기가 
 이제 서버환경에서만 보이던 상호작용이 클라이언트에서 볼 수 있게 됐다. 하지만 문제점이 발생했다.</br>
 OnRep_OverlappingWeapon가 클라이언트 환경에서만 작동하므로 ShowPickupWidget이 서버환경에서는 호출이 안된다는 점이다.</br>
 서버에서만 보이던 문제점을 해결했더니 반대로 서버에서만 안보이게 되어 리슨 서버 플레이어는 위젯을 못 보게 되었다.</br>
+서버 플레이어에게 위젯이 보이게 하기 위해서는 서버 환경에서 위젯이 보이도록 처리해야하고 충돌 처리 이후에 작동해야하므로 SetOverlappingWeapon함수에서 관련 코드를 작성하는게 제일 적당하다.</br>
+
+```
+void ABlasterCharacter::SetOverlappingWeapon(AWeapon* Weapon)
+{
+	// HasAuthority() -> OnSphereEndOverlap() -> SetOverlappingWeapon(nullptr)
+	if (IsLocallyControlled())
+	{
+		if (OverlappingWeapon)
+		{
+			OverlappingWeapon->ShowPickupWidget(false);
+		}
+	}
+	
+	OverlappingWeapon = Weapon;
+
+	// 내가 현재 Controll하고 있는 BlasterCharacter인가?
+	// 서버 환경에서 조종하는 BlasterCharacter? -> 리슨 서버를 담당하는 유저의 캐릭터
+	if (IsLocallyControlled())
+	{
+		if (OverlappingWeapon)
+		{
+			OverlappingWeapon->ShowPickupWidget(true);
+		}
+	}
+}
+```
+수정된 SetOverlappingWeapon 함수 버전이다.</br>
+기존에는 ``` OverlappingWeapon = Weapon; ``` 한 줄만 있었는데 위아래로 몇 줄의 코드가 추가 되었다.</br>
+<strong>IsLocallyControlled</strong> 함수는 내가 현재 조종하고 있는 상태인가를 나타내는 Pawn 클래스 함수이다.</br>
+여기서 <strong>SetOverlappingWeapon 함수는 서버 환경에서만 호출되므로</strong> IsLocallyControlled를 호출하면 리슨 서버에 있는 유저만 국한되게 된다.</br>
+따라서 이 함수에서 ``` if (IsLocallyControlled()) ``` 는 내가 리슨 서버 유저인가를 확인하는 코드이다.</br>
+리슨 서버 유저라면 OverlappingWeapon이 갱신되어 복제되기 전에 기존의 OverlappingWeapon의 위젯을 비활성화하고, 갱신을 한 후 복제된 이후에는 복제된 총기가 nullptr이 아니라면 위젯을 활성화하게 된다.</br></br>
+
+이렇게하여 자신이 리슨 서버이든 클라이언트이든 총기에 다가가면 위젯이 활성화되고 멀어지면 비활성화되게 했다.</br>
