@@ -854,7 +854,10 @@ void AWeapon::BeginPlay()
 지금은 총기에 가까이 가면 BP_Weapon에 있는 WidgetComponent가 활성화 되어야 하므로 총기가 복제되어야한다.</br></br>
 
 총기를 복제하기 위해서는 총기가 복제될 대상이라는 것을 알려야하고 복제된 대상인 총기를 소유할 클래스를 지정해줘야한다.</br>
-총기는 당연히 플레이어가 소유하므로 BlasterCharacter 클래스가 복제된 총기를 가지게 되고, 이를 위해 지역 변수로 선언해준다.</br>
+총기는 당연히 플레이어가 소유하므로 BlasterCharacter 클래스가 복제된 총기를 가지게 되고, 이를 위해 지역 변수로 선언해준다.</br></br>
+
+<strong>버그 리포트</strong>
+HasAuthority는 생성자에서 작동을 하지 않는다.</br>
 
 ```
 UPROPERTY(ReplicatedUsing = OnRep_OverlappingWeapon)
@@ -868,7 +871,7 @@ void OnRep_OverlappingWeapon(AWeapon* LastWeapon);
 복제될 대상은 복제 속성을 반드시 가져야하므로 UPROPERTY(Replicated)가 작성되어야 한다.</br>
 만약 복제되면서 호출할 함수가 있다면 해당 함수는 이름 앞에 <strong>'OnRep_'</strong>을 붙이고 속성을 <strong>UPROPERTY(ReplicatedUsing = 호출할 함수명)</strong>으로 해야한다.</br>
 특히 호출될 함수는 어떤 매개변수도 갖지 못하나 예외적으로 복제되면서 자신을 호출할 클래스는 매개변수로 받을 수 있다. 여기서는 Weapon클래스가 매개변수로 들어갈 수 있다.</br>
-여기까지는 변수에 그냥 '복제가능한' 옵션만 달린 것으로 제대로 활용하기 위해서는 따로 처리를 해줘야한다.</br>
+여기까지는 변수에 그냥 '복제가능한' 옵션만 달린 것으로 제대로 활용하기 위해서는 따로 처리를 해줘야한다.</br></br>
 
 ```
 void ABlasterCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -911,3 +914,37 @@ void ABlasterCharacter::SetOverlappingWeapon(AWeapon* Weapon)
 	OverlappingWeapon = Weapon;
 }
 ```
+플레이어가 총기와 충돌했을 때 부딪힌 총기를 OverlappingWeapon에 세팅해주고, 충돌에서 벗어날 때 nullptr을 OverlappingWeapon에 세팅을 해주고 있다.</br>
+충돌에서 벗얼날 때 nullptr를 보내는 이유는 총기에서 멀어졌을 때 위젯을 비활성화하기 위해 일종의 bool 변수와 비슷한 역할을 맡는다고 할 수 있다.</br>
+이렇게하면 OverlappingWeapon 변수의 값이 변경될 때마다 총기와 부딪힌 플레이어를 조종하는(Owner) 클라이언트에게 복제가 된다.</br></br>
+
+
+```
+void ABlasterCharacter::OnRep_OverlappingWeapon(AWeapon* LastWeapon)
+{
+	if (OverlappingWeapon)
+	{
+		OverlappingWeapon->ShowPickupWidget(true);
+	}
+
+	if (LastWeapon)
+	{
+		// 저번에 복제된 무기가 있다면 위젯 숨기기
+		LastWeapon->ShowPickupWidget(false);
+	}
+}
+```
+총기가 복제가 됐으면 이제 총기에 있는 위젯을 보여줄 차례다.</br>
+복제된 총기로부터 함수가 호출되므로 이 함수는 클라이언트에서 작동되는 함수이다.</br>
+잠시 함수 호출 흐름을 보자면 HasAuthority -> OnSphereOverlap -> SetOverlappingWeapon -> OnRep_OverlappingWeapon 순으로 호출이 된다.</br>
+SetOverlappingWeapon까지는 서버환경에서 작동하고 <strong>총기가 서버에서 클라이언트로 복제되면서</strong> 복제된 총기가 호출하는 OnRep_OverlappingWeapon는 클라이언트에서 작동하게 된다.</br></br>
+
+매개변수인 AWeapon* LastWeapon은 지금 복제된 무기가 아니라 바로 이전에 복제된 무기를 갖고 있다.</br>
+만약에 내가 권총에 부딪히고 지나갔다면 SetOverlappingWeapon(권총)이 호출된 후 SetOverlappingWeapon(nullptr)이 호출되게 된다.</br>
+처음에는 권총 이전에 복제된 무기가 없으므로 LastWeapon은 nullptr값을 갖고, OverlappingWeapon에는 권총이 세팅이 되어, 권총의 위젯이 활성화 된다.</br>
+이후에는 LastWeapon이 권총이 되어 위젯이 비활성화 되고, OverlappingWeapon에는 nullptr이 들어가 ```if (OverlappingWeapon)``` 문을 통과한다.</br>
+이전에 OnSphereEndOverlap에서 SetOverlappingWeapon(nullptr)을 하는 이유를 볼 수 있는 코드이다.</br></br>
+
+이제 서버환경에서만 보이던 상호작용이 클라이언트에서 볼 수 있게 됐다. 하지만 문제점이 발생했다.</br>
+OnRep_OverlappingWeapon가 클라이언트 환경에서만 작동하므로 ShowPickupWidget이 서버환경에서는 호출이 안된다는 점이다.</br>
+서버에서만 보이던 문제점을 해결했더니 반대로 서버에서만 안보이게 되어 리슨 서버 플레이어는 위젯을 못 보게 되었다.</br>
