@@ -983,3 +983,4 @@ void ABlasterCharacter::SetOverlappingWeapon(AWeapon* Weapon)
 리슨 서버 유저라면 OverlappingWeapon이 갱신되어 복제되기 전에 기존의 OverlappingWeapon의 위젯을 비활성화하고, 갱신을 한 후 복제된 이후에는 복제된 총기가 nullptr이 아니라면 위젯을 활성화하게 된다.</br></br>
 
 이렇게하여 자신이 리슨 서버이든 클라이언트이든 총기에 다가가면 위젯이 활성화되고 멀어지면 비활성화되게 했다.</br>
+![WeaponWidget](https://github.com/user-attachments/assets/3f4513cd-c99f-4c52-b822-794bc1578acf)
