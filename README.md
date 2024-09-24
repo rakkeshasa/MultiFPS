@@ -802,3 +802,112 @@ LobbyGameMode 클래스에 작성한 코드 중 핵심이라고 볼 수 있는 �
 
 정리하자면 게임 시작 화면에서 Host나 Join 버튼을 눌러 대기 레벨인 Lobby에서 다른 플레이어를 기다리고</br>
 Lobby 레벨에서 플레이어가 2명이 모였다면 심리스 방식으로 잠시 전환 레벨에 머물렀다가 게임 레벨(Blaster)로 넘어가게 되는 방식이다.</br>
+
+
+
+https://github.com/user-attachments/assets/51442161-3db6-414c-b0eb-8526fe89d804
+<div align="center"><strong>시연 영상</strong></div></BR>
+
+호스트 버튼을 눌러 Lobby 레벨로 이동하게 되고 열심히 뛰어다니는 동안 한 순간에 다른 플레이어가 보이면서 갑자기 화면이 까맣게 되는 것을 확인할 수 있다.</br>
+이는 Lobby 레벨 블루프린트에서 현재 레벨에 있는 플레이어 수를 체크하고 Blaster 레벨로 이동하는데 심리스 방식으로 이동해서 중간 레벨인 까만 화면이 나오는 것이다.</br>
+Blaster 맵으로 이동 후에는 정상적으로 플레이어가 맵을 돌아다니는 것을 볼 수 있다.</br></br>
+
+## 총기 구현하기
+우선 플레이어는 맵을 돌아다니면서 바닥에 있는 총기를 주워 장착하게 할 것이다.</br>
+대부분의 게임에서 힐킷이나, 버프류 같은 것은 부딪히면 바로 적용되지만, 무기류는 덥석 집지 않고 따로 키를 조작하여 집게한다.</br>
+이를 위해 플레이어가 바닥에 떨어진 총기에 가까이 갈 시 E키를 누르라는 위젯을 활성화 시킬 것이다.</BR>
+
+![WeaponBP](https://github.com/user-attachments/assets/43bedb82-e864-4ddc-933f-bf8b9bd67218)
+<div align="center"><strong>모든 총기의 부모 클래스가 될 BP_Weapon</strong></div></BR>
+
+모든 총기의 토대가 될 BP_Weapon에는 총의 Mesh를 입힐 SkeletonMeshComponent인 Weapon Mesh와 플레이어와 충돌 처리를 할 SphereComponent인 Area Sphere, 설명문이 나올 위젯을 세팅할 WidgetComponent인 Pickup Widget가 포함되어 있다.</br>
+충돌처리를 할 Area Sphere는 플레이어에게 반응 할 수 있도록 Collision을 따로 세팅해준다.</br>
+
+이제 Area Sphere에 Overlap 이벤트를 발생시켜 위젯이 보이게 하면 되지 않나 싶지만, 이 게임은 멀티플레이게임이다.</br>
+따라서 서버에서 플레이어가 총기에 충분히 접근했는지 판별하고 접근을 했다면 해당 플레이어를 조종중인 클라이언트에게 총기를 복제하여 위젯이 클라이언트 화면에 뜨게 해줘야한다.</br>
+
+![Picture](https://github.com/user-attachments/assets/da0d3f87-cc52-490a-9915-4a6594b5c72d)
+<div align="center"><strong>예시 그림</strong></div></BR>
+
+즉 움직임이나 총기 줍기와 같은 행동은 서버에서 처리하고 처리한 결과를 클라이언트에게 전달하는 것이다.</br>
+이를 위해서는 Overlap이벤트를 서버 환경에서만 실행시키도록 해야한다.</br>
+
+```
+void AWeapon::BeginPlay()
+{
+	Super::BeginPlay();
+	
+	if (HasAuthority())
+	{
+		AreaSphere->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+		AreaSphere->SetCollisionResponseToChannel(ECollisionChannel::ECC_Pawn, ECollisionResponse::ECR_Overlap);
+		AreaSphere->OnComponentBeginOverlap.AddDynamic(this, &AWeapon::OnSphereOverlap);
+		AreaSphere->OnComponentEndOverlap.AddDynamic(this, &AWeapon::OnSphereEndOverlap);
+	}
+}
+```
+
+<strong>HasAuthority</strong> 함수는 현재 서버 환경인가 체크하는 함수로 if문으로 감싸면 if문 안에 있는 코드는 서버 환경에서만 작동하게 된다.</br>
+총기가 서버 환경인지 클라이언트 환경인지 어떻게 파악하는지 궁금할 수도 있으나 Listen 서버로 작동하는 이상 무조건 서버 환경에 있는 총은 1개가 존재한다.</br>
+그렇다면 예상할 수 있듯이 <strong>충돌 처리를 서버 환경에서만 처리하므로</strong> 클라이언트가 총기와 부딪혀도 서버를 제외한 아무도 상호작용을 볼 수 없다.</br>
+오직 서버에 있는 플레이어만 해당 상호작용을 볼 수 있으므로 이 상호작용을 알맞은 클라이언트에게 복제해서 전달해줘야한다.</br>
+지금은 총기에 가까이 가면 BP_Weapon에 있는 WidgetComponent가 활성화 되어야 하므로 총기가 복제되어야한다.</br></br>
+
+총기를 복제하기 위해서는 총기가 복제될 대상이라는 것을 알려야하고 복제된 대상인 총기를 소유할 클래스를 지정해줘야한다.</br>
+총기는 당연히 플레이어가 소유하므로 BlasterCharacter 클래스가 복제된 총기를 가지게 되고, 이를 위해 지역 변수로 선언해준다.</br>
+
+```
+UPROPERTY(ReplicatedUsing = OnRep_OverlappingWeapon)
+class AWeapon* OverlappingWeapon;
+
+UFUNCTION()
+void OnRep_OverlappingWeapon(AWeapon* LastWeapon);
+```
+
+헤더 파일에 작성된 코드이다.</br>
+복제될 대상은 복제 속성을 반드시 가져야하므로 UPROPERTY(Replicated)가 작성되어야 한다.</br>
+만약 복제되면서 호출할 함수가 있다면 해당 함수는 이름 앞에 <strong>'OnRep_'</strong>을 붙이고 속성을 <strong>UPROPERTY(ReplicatedUsing = 호출할 함수명)</strong>으로 해야한다.</br>
+특히 호출될 함수는 어떤 매개변수도 갖지 못하나 예외적으로 복제되면서 자신을 호출할 클래스는 매개변수로 받을 수 있다. 여기서는 Weapon클래스가 매개변수로 들어갈 수 있다.</br>
+여기까지는 변수에 그냥 '복제가능한' 옵션만 달린 것으로 제대로 활용하기 위해서는 따로 처리를 해줘야한다.</br>
+
+```
+void ABlasterCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+
+	DOREPLIFETIME_CONDITION(ABlasterCharacter, OverlappingWeapon, COND_OwnerOnly);
+}
+```
+
+Replicated 속성을 가진 변수를 활용하기 위해서는 GetLifetimeReplicatedProps 함수에 복제할 변수를 등록해줘야한다.</br>
+DOREPLIFETIME_CONDITION( 복제된 변수를 갖는 클래스, 복제될 변수, 조건 )을 통해 복제될 변수인 Weapon을 등록해준다.</br>
+여기서 조건인 <strong>COND_OwnerOnly</strong>이 핵심 포인트로 Owner는 자신의 기기에서 Pawn을 직접 조종하는 클라이언트를 의미한다.</br>
+이를 통해 총기에 접근한 클라이언트만 Weapon 클래스인 OverlappingWeapon을 복제받을 수 있다.</br></br>
+
+OverlappingWeapon은 플레이어가 총기와 충돌했을 때만 복제가 되어야한다.</br>
+즉, Weapon클래스에 있는 OnSphereOverlap또는 OnSphereEndOverlap이 호출됐을 때만 복제가 되어야한다.</br>
+
+```
+void AWeapon::OnSphereOverlap(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult)
+{
+	ABlasterCharacter* BlasterCharacter = Cast<ABlasterCharacter>(OtherActor);
+	if (BlasterCharacter)
+	{
+		BlasterCharacter->SetOverlappingWeapon(this);
+	}
+}
+
+void AWeapon::OnSphereEndOverlap(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex)
+{
+	ABlasterCharacter* BlasterCharacter = Cast<ABlasterCharacter>(OtherActor);
+	if (BlasterCharacter)
+	{
+		BlasterCharacter->SetOverlappingWeapon(nullptr);
+	}
+}
+
+void ABlasterCharacter::SetOverlappingWeapon(AWeapon* Weapon)
+{	
+	OverlappingWeapon = Weapon;
+}
+```
