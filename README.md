@@ -1051,5 +1051,49 @@ void UCombatComponent::EquipWeapon(AWeapon* WeaponToEquip)
 	AreaSphere->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 }
 ```
-총을 소켓에 붙여주고 주운 무기는 더이상 위젯이 안보이도록 비활성화하며 충돌처리도 없도록 했다.</br>
-이제 
+총을 소켓에 붙여주고 주운 무기는 더이상 위젯이 안보이도록 비활성화하며 충돌처리도 없도록 했다.</br></br>
+
+멀티플레이의 특성을 생각하면 무기를 줍는 행동도 서버에서만 가능하다.</br>
+핵 플레이를 방지하거나 내 환경에서는 총을 주웠는데 다른 사람 환경에서는 총이 안주운 상태면 안되기 때문이다.</br>
+
+```
+if (HasAuthority())
+{
+	Combat->EquipWeapon(OverlappingWeapon);
+}
+```
+
+여기서 클라이언트는 총을 줍지 못하는 문제점이 생긴다.</br>
+EquipWeapon은 핵 방지나 동기화 처리를 위해 서버에서 처리해야하지만, 클라이언트도 EquipWeapon함수를 사용해야 총을 장착할 수 있다.</br>
+이러한 문제점을 해결할 수 있는 방안으로 <strong>원격 프로시저 호출(Remote Procedure Call, RPC)가</strong> 있다.</br>
+RPC는 한 컴퓨터에서 다른 컴퓨터에 위치한 프로시저나 함수를 호출하는 프로그래밍 패러다임이다.</BR>
+클라이언트는 RPC를 호출하여 서버 환경에서 EquipWeapon 함수를 실행하면 된다.</br>
+다음은 언리얼 엔진 환경에서 RPC를 구축하는 코드이다.</BR>
+
+```
+UFUNCTION(Server, Reliable)
+void ServerEquipButtonPressed();
+```
+
+``` UFUNCTION(Server, Reliable) ```에서 Server는 서버 환경에 있는 함수를 실행하고 Reliable은 신뢰성을 의미한다.</br>
+만약 서버가 클라이언트에서만 작동하는 함수를 실행하고 싶다면 ``` UFUNCTION(Client, Reliable) ``` 를 작성하면 된다.</br>
+신뢰성이 있는 RPC는 함수 실행을 보장한다. 처리 과정은 네트워크의 TCP와 비슷한 방식으로 패킷 전송에 실패하면 다시 RPC를 보낸다.</BR>
+만약 비신뢰성이라면 한 컴퓨터에서 다른 컴퓨터로 정보를 보낼 때 RPC가 중단될 수도 있다.</BR>
+이렇게 함수를 구현했다면 <strong>ServerEquipButtonPressed 함수는</strong> 클라이언트가 원격 프로시저 호출을 하면 <strong>서버 환경에서 작동한다.</strong></BR>
+
+```
+void ABlasterCharacter::ServerEquipButtonPressed_Implementation()
+{
+	if (Combat)
+	{
+		Combat->EquipWeapon(OverlappingWeapon);
+	}
+}
+```
+
+RPC 구현 함수는 이름 뒤에 반드시 _Implementation 접미사를 붙여야한다.</BR>
+이렇게 구현하면 클라이언트는 서버 측으로 요청을 보내 서버 환경에서 무기를 줍게 된다.</BR></BR>
+
+다시 문제점이 발생했다.</BR>
+서버 환경에서 주운 무기는 클라이언트에게 다시 복제하여 보내줘야한다.</BR>
+이 의미는 CombatComponent 클래스의 멤버 변수인 EquippedWeapon을 복제 속성으로 만들어주고 복제 대상으로 등록해야한다는 뜻이다.</br>
