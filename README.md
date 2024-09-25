@@ -887,6 +887,10 @@ DOREPLIFETIME_CONDITION( 복제된 변수를 갖는 클래스, 복제될 변수,
 여기서 조건인 <strong>COND_OwnerOnly</strong>이 핵심 포인트로 Owner는 자신의 기기에서 Pawn을 직접 조종하는 클라이언트를 의미한다.</br>
 이를 통해 총기에 접근한 클라이언트만 Weapon 클래스인 OverlappingWeapon을 복제받을 수 있다.</br></br>
 
+![rep](https://github.com/user-attachments/assets/ce3307c0-6fe4-43b0-882f-d00108ea05fc)
+</br></br>
+
+
 OverlappingWeapon은 플레이어가 총기와 충돌했을 때만 복제가 되어야한다.</br>
 즉, Weapon클래스에 있는 OnSphereOverlap또는 OnSphereEndOverlap이 호출됐을 때만 복제가 되어야한다.</br>
 
@@ -981,6 +985,9 @@ void ABlasterCharacter::SetOverlappingWeapon(AWeapon* Weapon)
 여기서 <strong>SetOverlappingWeapon 함수는 서버 환경에서만 호출되므로</strong> IsLocallyControlled를 호출하면 리슨 서버에 있는 유저만 국한되게 된다.</br>
 따라서 이 함수에서 ``` if (IsLocallyControlled()) ``` 는 내가 리슨 서버 유저인가를 확인하는 코드이다.</br>
 리슨 서버 유저라면 OverlappingWeapon이 갱신되어 복제되기 전에 기존의 OverlappingWeapon의 위젯을 비활성화하고, 갱신을 한 후 복제된 이후에는 복제된 총기가 nullptr이 아니라면 위젯을 활성화하게 된다.</br></br>
+
+![authority](https://github.com/user-attachments/assets/f5726e7c-bf8e-4d44-9d95-73661f7e6ae3)
+</br></br>
 
 이렇게하여 자신이 리슨 서버이든 클라이언트이든 총기에 다가가면 위젯이 활성화되고 멀어지면 비활성화되게 했다.</br>
 ![WeaponWidget](https://github.com/user-attachments/assets/3f4513cd-c99f-4c52-b822-794bc1578acf)
