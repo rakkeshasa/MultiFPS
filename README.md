@@ -1116,3 +1116,32 @@ void ABlasterCharacter::EquipButtonPressed()
 서버 환경에서 무기를 줍는 것은 좋지만 장착한 무기는 클라이언트에게 다시 복제하여 보내줘야한다.</BR>
 호출 순서를 살펴보면 HasAuthority -> EquipWeapon 순으로 서버에서만 진행되므로 위젯과 콜리전 비활성화가 클라이언트 측에서 적용되지 않고 있다.</br>
 따라서 CombatComponent 클래스의 멤버 변수인 EquippedWeapon을 복제 속성으로 만들어주고 복제 대상으로 등록해야한다.</br>
+무기의 현재 상태를 나타내는 WeaponState도 복제 속성으로 만들어 클라이언트가 장착한 무기의 상태도 복제 될 수 있도록한다.</br>
+
+```
+void AWeapon::SetWeaponState(EWeaponState State)
+{
+	WeaponState = State;
+
+	switch (WeaponState)
+	{
+	case EWeaponState::EWS_Equipped:
+		ShowPickupWidget(false);
+		AreaSphere->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		break;
+	}
+}
+
+void AWeapon::OnRep_WeaponState()
+{
+	switch (WeaponState)
+	{
+	case EWeaponState::EWS_Equipped:
+		ShowPickupWidget(false); // 장착된 상태면 위젯 비활성화
+		break;
+	}
+}
+```
+무기가 장착되면서 SetWeaponState를 통해 무기 상태가 Equipped가 될거이며 이것은 서버 환경에서 처리되는 일이다.</br>
+서버 환경에서는 OnSphereOverlapped와 같은 함수로 각종 콜리전과 충돌 이벤트를 처리했으므로 SetWeaponState 함수에서 콜리전과 위젯을 비활성화 해준다.</br>
+이후 무기 상태가 변경되면서 복제될 무기 상태는 클라이언트로 가게 되므로 충돌과 관련없는 콜리전을 빼고 위젯만 비활성화시켜 복제 된 총의 위젯이 더 이상 안보이게 한다.</br>
