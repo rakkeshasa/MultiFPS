@@ -991,3 +991,65 @@ void ABlasterCharacter::SetOverlappingWeapon(AWeapon* Weapon)
 
 이렇게하여 자신이 리슨 서버이든 클라이언트이든 총기에 다가가면 위젯이 활성화되고 멀어지면 비활성화되게 했다.</br>
 ![WeaponWidget](https://github.com/user-attachments/assets/3f4513cd-c99f-4c52-b822-794bc1578acf)
+</br></br>
+
+이제 E키를 눌러 총기를 주워 캐릭터에게 부착해줄 차례이다.</BR>
+총을 장착하거나 쏘거나 피해를 입히는 기능을 BlasterPlayer클래스에 다 넣기에는 너무 방대하므로 이러한 역할을 담당해줄 ActorComponent클래스인 CombatComponent를 생성한다.</br>
+전투기능을 담당하는 CombatComponent는 리슨 서버 유저든 클라이언트든 모든 캐릭터가 갖고있어야 하므로 복제 속성을 갖고 있어야한다.</br>
+기존에 복제 속성을 처리한것과 차이점으로 <strong>컴포넌트는 복제 속성만 주고 복제 대상이라고 등록할 필요가 없다.</strong></br>
+마지막으로 복제된 컴포넌트는 자신의 주인인 플레이어와 주운 무기를 따로 저장할 변수가 필요하다.</br>
+
+```
+UCLASS( ClassGroup=(Custom), meta=(BlueprintSpawnableComponent) )
+class BLASTER_API UCombatComponent : public UActorComponent
+{
+private:
+	class ABlasterCharacter* Character;
+	AWeapon* EquippedWeapon;
+}
+```
+
+CombatComponent에 있는 멤버 변수 Character에 자신이 조종하는 BlasterCharacter가 들어가야하는데 이 부분을 BlasterCharacter클래스에서 처리해줘야한다.</br>
+캐릭터가 만들어지고 월드에 소환되기 전에 이 컴포넌트에 캐릭터를 지정해줘야 소환 된 후에 전투기능이 알맞게 작동할 것이다.</BR>
+<strong>PostInitializeComponents</strong> 함수가 그 시점에 CombatComponent에 Character 변수 값을 세팅해줄 수 있다.</br></br>
+
+![lifecycle2](https://github.com/user-attachments/assets/f9c7b0ae-9bdd-48ad-878b-7cdf8ab1a375)
+<div align="center"><strong>언리얼엔진 라이프 사이클</strong></div></BR>
+
+라이프 사이클을 보면 Actor가 만들어지고 월드에 소환되기전에 호출되는 함수라는 것을 알 수 있다.</br>
+이 함수에서 해줄 것은 간단하다. CombatComponent클래스의 Character변수에 자기 자신을 세팅해주는것이 끝이다.</br>
+
+```
+void ABlasterCharacter::PostInitializeComponents()
+{
+	Super::PostInitializeComponents();
+
+	if (Combat)
+	{
+		Combat->Character = this;
+	}
+}
+```
+</br>
+CombatComponent클래스에 무기 장착을 담당할 EquipWeapon은 플레이어가 E키를 누르면 호출되는 함수로 주운 무기를 입력받고 무기를 스켈레톤 소켓에 부착할 것이다.</br>
+
+```
+void UCombatComponent::EquipWeapon(AWeapon* WeaponToEquip)
+{
+	if (Character == nullptr || WeaponToEquip == nullptr) return;
+
+	EquippedWeapon = WeaponToEquip;
+	EquippedWeapon->SetWeaponState(EWeaponState::EWS_Equipped);
+
+	const USkeletalMeshSocket* HandSocket = Character->GetMesh()->GetSocketByName(FName("RightHandSocket"));
+	if (HandSocket)
+	{
+		HandSocket->AttachActor(EquippedWeapon, Character->GetMesh());
+	}
+
+	ShowPickupWidget(false);
+	AreaSphere->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+}
+```
+총을 소켓에 붙여주고 주운 무기는 더이상 위젯이 안보이도록 비활성화하며 충돌처리도 없도록 했다.</br>
+이제 
