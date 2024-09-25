@@ -1094,6 +1094,25 @@ void ABlasterCharacter::ServerEquipButtonPressed_Implementation()
 RPC 구현 함수는 이름 뒤에 반드시 _Implementation 접미사를 붙여야한다.</BR>
 이렇게 구현하면 클라이언트는 서버 측으로 요청을 보내 서버 환경에서 무기를 줍게 된다.</BR></BR>
 
-다시 문제점이 발생했다.</BR>
-서버 환경에서 주운 무기는 클라이언트에게 다시 복제하여 보내줘야한다.</BR>
-이 의미는 CombatComponent 클래스의 멤버 변수인 EquippedWeapon을 복제 속성으로 만들어주고 복제 대상으로 등록해야한다는 뜻이다.</br>
+```
+void ABlasterCharacter::EquipButtonPressed()
+{
+	if (Combat)
+	{
+		if (HasAuthority())
+		{
+			Combat->EquipWeapon(OverlappingWeapon);
+		}
+		else
+		{
+			ServerEquipButtonPressed();
+		}
+	}
+}
+```
+정리하면 E키를 누르면 리슨 서버 유저면 바로 ComatComponent 클래스의 EquipWeapon 함수를 호출할 것이고</br>
+클라이언트 유저면 RPC 함수인 ServerEquipButtonPressed 함수를 통해 서버 환경에서 EquipWeapon 함수를 호출한다.</br></br>
+
+서버 환경에서 무기를 줍는 것은 좋지만 장착한 무기는 클라이언트에게 다시 복제하여 보내줘야한다.</BR>
+호출 순서를 살펴보면 HasAuthority -> EquipWeapon 순으로 서버에서만 진행되므로 위젯과 콜리전 비활성화가 클라이언트 측에서 적용되지 않고 있다.</br>
+따라서 CombatComponent 클래스의 멤버 변수인 EquippedWeapon을 복제 속성으로 만들어주고 복제 대상으로 등록해야한다.</br>
