@@ -1066,8 +1066,12 @@ if (HasAuthority())
 여기서 클라이언트는 총을 줍지 못하는 문제점이 생긴다.</br>
 EquipWeapon은 핵 방지나 동기화 처리를 위해 서버에서 처리해야하지만, 클라이언트도 EquipWeapon함수를 사용해야 총을 장착할 수 있다.</br>
 이러한 문제점을 해결할 수 있는 방안으로 <strong>원격 프로시저 호출(Remote Procedure Call, RPC)가</strong> 있다.</br>
-RPC는 한 컴퓨터에서 다른 컴퓨터에 위치한 프로시저나 함수를 호출하는 프로그래밍 패러다임이다.</BR>
-클라이언트는 RPC를 호출하여 서버 환경에서 EquipWeapon 함수를 실행하면 된다.</br>
+RPC는 한 컴퓨터에서 다른 컴퓨터에 위치한 프로시저나 함수를 호출하는 프로그래밍 패러다임이다.</BR></BR>
+
+![rpc](https://github.com/user-attachments/assets/56ed24f6-cb12-4587-9aac-06e201c8ef78)
+</BR>
+
+클라이언트는 RPC를 통해 서버 환경에서 EquipWeapon 함수를 실행하면 된다.</br>
 다음은 언리얼 엔진 환경에서 RPC를 구축하는 코드이다.</BR>
 
 ```
@@ -1142,6 +1146,6 @@ void AWeapon::OnRep_WeaponState()
 	}
 }
 ```
-무기가 장착되면서 SetWeaponState를 통해 무기 상태가 Equipped가 될거이며 이것은 서버 환경에서 처리되는 일이다.</br>
+무기가 장착되면서 SetWeaponState를 통해 무기 상태가 Equipped가 될것이며 이것은 서버 환경에서 처리되는 일이다.</br>
 서버 환경에서는 OnSphereOverlapped와 같은 함수로 각종 콜리전과 충돌 이벤트를 처리했으므로 SetWeaponState 함수에서 콜리전과 위젯을 비활성화 해준다.</br>
 이후 무기 상태가 변경되면서 복제될 무기 상태는 클라이언트로 가게 되므로 충돌과 관련없는 콜리전을 빼고 위젯만 비활성화시켜 복제 된 총의 위젯이 더 이상 안보이게 한다.</br>
