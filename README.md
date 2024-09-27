@@ -1148,4 +1148,34 @@ void AWeapon::OnRep_WeaponState()
 ```
 무기가 장착되면서 SetWeaponState를 통해 무기 상태가 Equipped가 될것이며 이것은 서버 환경에서 처리되는 일이다.</br>
 서버 환경에서는 OnSphereOverlapped와 같은 함수로 각종 콜리전과 충돌 이벤트를 처리했으므로 SetWeaponState 함수에서 콜리전과 위젯을 비활성화 해준다.</br>
-이후 무기 상태가 변경되면서 복제될 무기 상태는 클라이언트로 가게 되므로 충돌과 관련없는 콜리전을 빼고 위젯만 비활성화시켜 복제 된 총의 위젯이 더 이상 안보이게 한다.</br>
+이후 무기 상태가 변경되면서 복제될 무기 상태는 클라이언트로 가게 되므로 충돌과 관련없는 콜리전을 빼고 위젯만 비활성화시켜 복제 된 총의 위젯이 더 이상 안보이게 한다.</br></br>
+
+<strong>< 조준하기 ></strong></br>
+총을 장착했다면 총을 조준하여 쏠 준비를 해야한다.</br>
+총을 장착한 상태로 마우스 우클릭을 하면 bool 타입 bAiming 변수를 true로 해주고 우클릭에서 떼면 false로 해준다.</br>
+그리고 이 bool 타입에 따라 조준하는 애니메이션을 틀어주면 되는데, 다른 클라이언트에서도 조준하는 애니메이션을 틀어줄려면 bAiming의 변수가 복제가 되야한다.</br>
+
+```
+void UCombatComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+
+	DOREPLIFETIME(UCombatComponent, bAiming);
+}
+
+void UCombatComponent::SetAiming(bool bIsAiming)
+{
+	bAiming = bIsAiming;
+	
+	ServerSetAiming(bIsAiming);
+}
+
+void UCombatComponent::ServerSetAiming_Implementation(bool bIsAiming)
+{
+	bAiming = bIsAiming;
+}
+```
+당연히 서버에서 해당 행동을 판정하고 클라이언트에게 복제해야하므로 RPC를 사용하여 복제한다.</BR>
+SetAiming에서 서버와 클라이언트를 상관안하고 RPC를 호출하고 있다.</BR>
+클라이언트가 서버로 호출하는 RPC의 경우, 클라이언트에서 조작중인 캐릭터는 서버에서 함수를 실행하고</BR>
+서버가 서버로 호출하는 RPC의 경우, 서버에서 조작중인 캐릭터 또한 서버에서 함수를 실행하기에 환경에 상관없이 RPC를 호출하고 있다.</BR>
