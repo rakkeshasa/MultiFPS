@@ -1175,7 +1175,149 @@ void UCombatComponent::ServerSetAiming_Implementation(bool bIsAiming)
 	bAiming = bIsAiming;
 }
 ```
+
 당연히 서버에서 해당 행동을 판정하고 클라이언트에게 복제해야하므로 RPC를 사용하여 복제한다.</BR>
 SetAiming에서 서버와 클라이언트를 상관안하고 RPC를 호출하고 있다.</BR>
 클라이언트가 서버로 호출하는 RPC의 경우, 클라이언트에서 조작중인 캐릭터는 서버에서 함수를 실행하고</BR>
 서버가 서버로 호출하는 RPC의 경우, 서버에서 조작중인 캐릭터 또한 서버에서 함수를 실행하기에 환경에 상관없이 RPC를 호출하고 있다.</BR>
+
+## 총 쏘기
+많은 FPS게임들은 화면에 조준점을 제공하고, 총을 쏘면 총알이 조준점을 향해 나간다.</BR>
+화면상의 조준점을 대고 총을 쏘면 플레이어는 그 지역에 맞을거라 기대하고 게임에서는 발사체가 조준점을 기준으로 나아가도록 해야한다.</BR></BR>
+
+![EX2](https://github.com/user-attachments/assets/1e64f181-af59-4430-aca2-3edcd66c1e67)
+<div align="center"><strong>오버워치의 조준점</strong></div></BR></BR>
+
+조준점은 화면 중앙으로 중앙을 항해 총을 쏠 수 있도록 하고, 조준점으로 발사체가 나가도록 해야한다.</BR>
+그러기 위해서는 화면 상에서 중앙을 잡고 그 위치를 3D 세상인 World상에서의 좌표를 잡아야 발사체가 조준점을 향해 나갈 수 있다.</br>
+
+```
+void UCombatComponent::TraceUnderCrosshairs(FHitResult& TraceHitResult)
+{
+	FVector2D ViewportSize;
+	if (GEngine && GEngine->GameViewport)
+	{
+		GEngine->GameViewport->GetViewportSize(ViewportSize);
+	}
+
+	FVector2D CrosshairLocation(ViewportSize.X / 2.f, ViewportSize.Y / 2.f);
+
+	FVector CrosshairWorldPosition;
+	FVector CrosshairWorldDirection;
+	bool bScreenToWorld = UGameplayStatics::DeprojectScreenToWorld(
+		UGameplayStatics::GetPlayerController(this, 0),
+		CrosshairLocation,
+		CrosshairWorldPosition,
+		CrosshairWorldDirection
+	);
+}
+```
+
+화면의 중앙을 따오는 건 엔진에서 Viewport 사이즈를 얻어와 절반씩 나눠주면 쉽게 얻을 수 있다.</br>
+그래픽스에서 3D 물체를 투영시켜서 2D 화면상에서 그렸다면, 다시 3D 월드의 좌표를 구하기 위해서는 반투영을 해줘야하는데 <strong>DeprojectScreenToWorld</strong>이 그 역할을 한다.</br>
+CrosshairWorldPosition은 조준점의 위치를 나타내고, CrosshairWorldDirection은 조준점이 나아가는 방향을 나타낸다.</br>
+2D에서 점을 3D 세상을 변환시키면 선이 되기때문에 위치와 방향이 결과로 나온다.</BR></BR>
+
+CrosshairWorldPosition은 이제 총알이 나가는 첫 위치가 되고, 발사되는 위치로부터 방향 벡터인 CrosshairWorldDirection에 나아가는 거리를 곱해주면 총알의 궤적이 구해진다.</BR>
+이 궤적을 라인 트레이싱하여 맞는 대상이 찾으면 된다.</BR>
+
+```
+FVector Start = CrosshairWorldPosition;
+FVector End = Start + CrosshairWorldDirection * TRACE_LENGTH;
+
+GetWorld()->LineTraceSingleByChannel(
+	TraceHitResult,
+	Start,
+	End,
+	ECollisionChannel::ECC_Visibility
+);
+```
+
+총알이 나가는 궤적을 구했으니 총을 쏘는 행동을 통해 총알이 나가도록 해야한다.</BR>
+좌클릭을 누르면 전투 담당 컴포넌트인 CombatComponent 클래스는 총기가 격발하는 애니메이션과 플레이어가 총 쏘는 애니메이션 몽타주를 출력한다.</br>
+
+```
+void UCombatComponent::FireButtonPressed(bool bPressed)
+{
+	bFireButtonPressed = bPressed;
+
+	if (Character && bFireButtonPressed)
+	{
+		Character->PlayFireMontage(bAiming);
+		EquippedWeapon->Fire();
+	}
+}
+```
+
+![shot1](https://github.com/user-attachments/assets/7765cc8f-13c5-4ae2-a8e7-72b352b755d8)
+<div align="center"><strong>실행 결과</strong></div></BR></BR>
+
+총기의 애니메이션과 플레이어의 애니메이션 몽타주가 싱글플레이에서는 잘 작동했지만 멀티플레이 환경에서 다른 유저들한테는 보여지지 않았다.</br>
+이것은 총기의 애니메이션과 플레이어의 애니메이션 몽타주가 다른 플레이어들한테 복제되지 않았기 때문이다.</br></br>
+
+두가지 해결 방안이 있는데, bFireButtonPressed 변수를 복제 속성을 달아 복제를 하여 true값일 때만 애니메이션을 출력하는 방법과 RPC를 이용하는 방법이 있다.</BR>
+bFireButtonPressed 변수를 복제 속성으로 할경우 서버에서 true로 설정할 때, 클라이언트도 true값을 받게 되고 애니메이션 블루프린트에서 true일 때만 애니메이션을 실행하면된다.</br>
+단점으로는 격발 애니메이션을 연속으로 출력해야할 때 무조건 bFireButtonPressed 변수가 값이 변해야하고 그러기 위해서는 마우스를 클릭했다 떼는 것을 반복하는 방법밖에 없다.</br>
+</br>
+자동화기와 같은 돌격소총이나 계속해서 불을 뿜어내는 화염방사기와 같은 무기를 위해서는 클릭 유지시 계속해서 격발 애니메이션이 나가도록 해야한다.</BR>
+따라서 RPC를 이용해 FireButtonPressed 함수가 호출될 때마다 서버에서 격발 애니메이션을 재생하도록 처리하면된다.</br>
+
+```
+void UCombatComponent::FireButtonPressed(bool bPressed)
+{
+	bFireButtonPressed = bPressed;
+
+	if (bFireButtonPressed)
+	{
+		ServerFire();
+	}
+}
+
+void UCombatComponent::ServerFire_Implementation()
+{
+	if (Character)
+	{
+		Character->PlayFireMontage(bAiming);
+		EquippedWeapon->Fire(HitTarget);
+	}
+}
+```
+
+이제 bFireButtonPressed가 true일 때마다 RPC를 통해 서버 환경에서 애니메이션을 재생하게 된다.</BR>
+서버 환경에서 애니메이션을 재생했지만 다른 클라이언트들에게는 격발 장면이 보이지 않는다.</BR>
+서버에서만 처리했기 때문에 총을 쏜 플레이어는 자신의 화면에서 애니메이션을 못 보고 오히려 리슨 서버 플레이어가 해당 애니메이션을 보는 상황이다.</BR>
+총을 격발하는 장면은 모든 플레이어들에게 똑같이 보여야하므로 서버 환경이든 클라이언트 환경이든 애니메이션이 보여야한다.</BR>
+따라서 서버 환경에서만 애니메이션을 재생하는 것이 아닌, 클라이언트 환경에서도 똑같이 재생을 해줘야한다.</BR></BR>
+
+서버와 클라이언트 동시에 실행시키기 위해 <strong>MulticastRPC</strong>가 있다.</BR>
+멀티캐스트 RPC는 서버와 클라이언트 두 환경에서 실행이 가능하게끔 호출을 한다.</BR> 
+호출하는 주체에 따라 어느 환경에서 실행되는지 다르다.</BR>
+
+![rpc](https://github.com/user-attachments/assets/cf603aeb-8a6f-46ab-90bd-bed37dbc6862)
+<div align="center"><strong>RPC에 관한 표</strong></div></BR></BR>
+
+클라이언트에서 호출하면 클라이언트에서만 실행되므로 소용이 없고, 서버에서 호출해야 서버와 클라이언트 모두 실행할 수 있다.</BR>
+따라서 멀티캐스트 RPC를 적절하게 사용하기 위해서는 서버 환경임을 보장받아야한다.</BR>
+HasAuthority를 통해 서버 환경일 때만 멀티캐스트 RPC를 하거나 이미 서버 환경인 ServerFire_Implementation에서 멀티캐스트 RPC를 하는 법도 있다.</BR>
+
+```
+void UCombatComponent::ServerFire_Implementation()
+{
+	MulticastFire();
+}
+
+void UCombatComponent::MulticastFire_Implementation()
+{
+	if (Character)
+	{
+		Character->PlayFireMontage(bAiming);
+		EquippedWeapon->Fire(HitTarget);
+	}
+}
+```
+
+최적화를 생각하면 RPC를 적게 사용하는 HasAuthority를 사용하는 것이 좋으나, 명시성을 위해 이렇게 작성하였다.</br>
+이제 좌클릭을 하면 서버와 클라이언트 모두 애니메이션을 재생하는 함수를 실행하게 된다.</br>
+
+![shot2](https://github.com/user-attachments/assets/2a1ef534-0a15-4339-8330-a2a2e1767987)
+<div align="center"><strong>모든 화면에 보이는 격발 장면</strong></div></BR></BR>
