@@ -1321,3 +1321,6 @@ void UCombatComponent::MulticastFire_Implementation()
 
 ![shot2](https://github.com/user-attachments/assets/2a1ef534-0a15-4339-8330-a2a2e1767987)
 <div align="center"><strong>모든 화면에 보이는 격발 장면</strong></div></BR></BR>
+
+격발을 했다면 총알이 나갈 차례다.</br>
+라인 트레이싱을 통해 부딪힌 대상의 위치를 FVector로 저장하고
