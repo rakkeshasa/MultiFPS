@@ -1218,6 +1218,10 @@ void UCombatComponent::TraceUnderCrosshairs(FHitResult& TraceHitResult)
 CrosshairWorldPosition은 조준점의 위치를 나타내고, CrosshairWorldDirection은 조준점이 나아가는 방향을 나타낸다.</br>
 2D에서 점을 3D 세상을 변환시키면 선이 되기때문에 위치와 방향이 결과로 나온다.</BR></BR>
 
+![deproject](https://github.com/user-attachments/assets/49f94ea8-24a0-4fd4-a8f9-adb572c1e58e)
+<div align="center"><strong>2D에서 3D로 변환 결과</strong></div></BR></BR>
+
+
 CrosshairWorldPosition은 이제 총알이 나가는 첫 위치가 되고, 발사되는 위치로부터 방향 벡터인 CrosshairWorldDirection에 나아가는 거리를 곱해주면 총알의 궤적이 구해진다.</BR>
 이 궤적을 라인 트레이싱하여 맞는 대상이 찾으면 된다.</BR>
 
@@ -1349,7 +1353,12 @@ void AProjectileWeapon::Fire(const FVector& HitTarget)
 
 SocketTransform 변수는 총구의 위치를 나타내고, 매개변수인 HitTarget은 라인트레이싱의 결과인 TraceHitResult.ImpactPoint의 값을 갖고 있다.</br>
 총구로부터 맞은 대상까지 총알을 날리기 위해서는 <strong>어디서부터 총알이 출발할지, 어느 방향으로 나갈지</strong> 구해야한다.</br>
-총알의 시작 지점은 총구로 SocketTransform이며, 날아가는 방향은 총구의 위치와 맞은 대상의 위치를 통해 벡터를 구할 수 있으며 따로 방향만 추출하면 방향 벡터를 구할 수 있다.</br>
+총알의 시작 지점은 총구로 SocketTransform이며, 날아가는 방향은 총구의 위치와 맞은 대상의 위치를 통해 벡터를 구할 수 있으며 따로 방향만 추출하면 방향 벡터를 구할 수 있다.</br></br>
+
+![vector](https://github.com/user-attachments/assets/4ec30984-473f-4b0e-a08f-83aa2d6beb09)
+<div align="center"><strong>간단한 그림 예시</strong></div></BR></BR>
+
+
 출발점과 방향을 구했다면 SpawnActor<AProjectile>을 통해 발사체 클래스 객체를 소환하면 총알이 발사가 된다.</br>
 이후 블루프린트에서 적절한 이동 속도와 중력값을 주면 알맞은 방향으로 날아가게 되며 멀티플레이를 위해 이 코드는 서버에서만 작동이 되야한다.</br>
 다른 클라이언트와의 동기화나 버그성 플레이를 방지하기 위해 서버에서 사격과 관련된 일들을 처리하고 클라이언트에게 복제를 해줘야한다.</br>
