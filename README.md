@@ -1467,3 +1467,46 @@ void AProjectileWeapon::Fire(const FVector& HitTarget)
 
 ![projectile2](https://github.com/user-attachments/assets/dc0d29fb-6413-4d28-9cf7-cb9b4edf9fc0)
 <div align="center"><strong>클라이언트 조준점으로 날아가는 총알</strong></div></BR></BR>
+
+
+<strong><조준하기></strong></br>
+보통 FPS에서 무기를 조준하면 멀리 있는 공간을 확대하여 볼 수 있게 되고 더 정밀하게 사격이 가능하다.</BR>
+1인칭 FPS의 경우 스나이퍼 라이플에 주로 줌인 기능이 있고, 3인칭 FPS에서는 플레이어 등 뒤에 카메라가 있기에 대부분의 무기에 줌인기능을 제공한다.</BR>
+FPS에서 더욱 정밀한 사격을 통해 적을 맞추는 것은 플레이어에게 만족감을 향상시키기 때문에 대부분 줌인 기능을 포함하고 있다.</BR></BR>
+
+줌인 기능을 구현하기 위해서는 FOV(시야각)을 조절해줘야한다.</BR>
+평상시의 시야각을 미리 변수에 저장해놓고 조준 키를 누르면 카메라가 지정한 시야각으로 보여줘야한다.</BR>
+시야각 또한 무기마다 다르거나 무기 파츠를 장착하여 배율을 다르게 할 수 있어 Weapon 클래스에 조준 시 바뀔 시야각을 변수에 담아 각 무기마다 다른 시야각을 가질 수 있게 했다.</br>
+조준 시마다 시야각을 조정해야하므로 조준 중인지 확인해야 할 필요가 있으며, 저번에 애니메이션 블루프린트에 사용하기 위해 전투 기능 담당인 CombatComponent 클래스에 복제속성으로 bAiming 변수를 만들었다.
+따라서 매 틱마다 조준 상태인지 확인하고, 상태별로 알맞은 FOV를 카메라에 세팅을 해줄 것이다.</BR>
+
+```
+void UCombatComponent::BeginPlay()
+{
+	if (Character->GetFollowCamera())
+	{
+		DefaultFOV = Character->GetFollowCamera()->FieldOfView;
+		CurrentFOV = DefaultFOV;
+	}
+}
+
+void UCombatComponent::InterpFOV(float DeltaTime)
+{
+	if (bAiming)
+		CurrentFOV = FMath::FInterpTo(CurrentFOV, EquippedWeapon->GetZoomedFOV(), DeltaTime, EquippedWeapon->GetZoomInterpSpeed());
+	else
+		CurrentFOV = FMath::FInterpTo(CurrentFOV, DefaultFOV, DeltaTime, ZoomInterpSpeed);
+
+	Character->GetFollowCamera()->SetFieldOfView(CurrentFOV);
+}
+```
+
+줌 아웃을 할 때는 기존 FOV값을 가져와야하기 때문에 DefaultFOV에 따로 저장을 해놓는다.</BR>
+매 틱마다 조준 중인지 확인하기 위해 TickComponent는 InterpFOV를 매 틱마다 호출하여 InterpFOV에서 매 틱마다 체크하게된다.</br>
+FInterpTo 함수를 통해 현재 FOV에서 얼마만큼의 속도로 변화할지 정하고 SetFieldOfView로 카메라의 FOV를 세팅해줬다.</BR></BR>
+
+![zoomout](https://github.com/user-attachments/assets/c942fc98-d941-4b42-aab5-d02c2d5317f5)
+<div align="center"><strong>조준 해제 결과(평상시)</strong></div></BR></BR>
+
+![ZoomIn](https://github.com/user-attachments/assets/12632753-2bc8-40d8-8e6e-fa125014a1c0)
+<div align="center"><strong>조준 결과</strong></div></BR></BR>
