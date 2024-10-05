@@ -1628,5 +1628,99 @@ Pawn클래스(플레이어 캐릭터)는 서버와 모든 클라이언트에 존
 체력은 총알에 맞으면 닳고, 힐이나 힐팩을 먹으면 차며, 0이 되면 죽는 기본적인 게임 시스템이다.</br>
 체력 시스템은 Player State에 구현하는 것이 적합해 보이나 캐릭터 클래스에 구현할 것이다.</br>
 Player State는 네트워크 업데이트가 느려 체력 상태를 모든 클라이언트들에게 즉각적으로 반영하기 힘들다는 단점이 있다.</br>
-반면에 캐릭터 클래스는 데미지 이벤트를 다루는 함수가 있고, 캐릭터를 빠르게 복제할 수 있다.</BR>
+반면에 캐릭터 클래스는 데미지 이벤트를 다루는 함수가 있고, 캐릭터를 빠르게 복제할 수 있다.</BR></BR>
 
+체력은 2가지로 구성되는데 HP통인 최대 체력과 캐릭터가 현재 가지고 있는 HP인 현재 체력으로 구성된다.</br>
+현재 체력은 절대로 최대 체력을 넘어설 수 없으며 서버와 다른 클라이언트들에게 공유되어야 하는 속성이다.</BR>
+현재 체력이 변경 될 때마다 복제가 되어야 하며 화면상에 내 HP수치를 알려줘야하므로 ```UPROPERTY(ReplicatedUsing = OnRep_Health)``` 속성을 붙였다.</BR>
+체력이 변경되는 경우는 체력이 회복되거나 총알을 맞아 피해를 입었을 때 체력이 변경된다.</BR>
+
+```
+void AProjectile::OnHit(UPrimitiveComponent* HitComp, AActor* OtherActor, UPrimitiveComponent* OtherComp, FVector NormalImpulse, const FHitResult& Hit)
+{
+	ABlasterCharacter* BlasterCharacter = Cast<ABlasterCharacter>(OtherActor);
+	if (BlasterCharacter)
+	{
+ 		BlasterCharacter->MulticastHit();
+	}
+
+	Destroy();
+}
+
+void AProjectileBullet::OnHit(UPrimitiveComponent* HitComp, AActor* OtherActor, UPrimitiveComponent* OtherComp, FVector NormalImpulse, const FHitResult& Hit)
+{
+	ACharacter* OwnerCharacter = Cast<ACharacter>(GetOwner());
+	if (OwnerCharacter)
+	{
+		AController* OwnerController = OwnerCharacter->Controller;
+		if (OwnerController)
+		{
+			UGameplayStatics::ApplyDamage(OtherActor, Damage, OwnerController, this, UDamageType::StaticClass());
+		}
+	}
+
+	Super::OnHit(HitComp, OtherActor, OtherComp, NormalImpulse, Hit);
+}
+```
+
+기존에 이미 구현한 Projectile::OnHit에서는 부딪힌 대상에게서 피격 애니메이션을 재생하기 위해 멀티캐스트 RPC를 사용했다.</BR>
+피격 애니메이션이 재생되기 전에 ProjectileBullet이라는 자손 클래스를 생성해 OnHit 함수를 오버라이딩했다.</br>
+자손 클래스의 OnHit 함수는 ApplyDamage를 통해 상대 Actor에게 데미지를 입힌다.</br>
+데미지를 입은 Actor는 ApplyDamage가 보낸 데미지를 엔진에서 이미 구현된 OnTakeAnyDamage 델리게이트를 통해 데미지를 입었다는 것을 알게된다.</br></br>
+
+```
+void ABlasterCharacter::BeginPlay()
+{
+	if (HasAuthority())
+	{
+		OnTakeAnyDamage.AddDynamic(this, &ABlasterCharacter::ReceiveDamage);
+	}
+}
+
+void ABlasterCharacter::ReceiveDamage(AActor* DamagedActor, float Damage, const UDamageType* DamageType, AController* InstigatorController, AActor* DamageCauser)
+{
+	Health = FMath::Clamp(Health - Damage, 0.f, MaxHealth);
+
+	if (Health == 0.f)
+	{
+		// 죽음 처리하기
+	}
+}
+
+void ABlasterCharacter::OnRep_Health()
+{
+	//...
+}
+```
+
+서버에서 데미지를 처리하기 위해 HasAuthority로 델리게이트를 제한했으며, 콜백 함수인 ReceiveDamage에서는 받은 데미지의 수치에 따라 현재 체력인 Health 값을 조정하고 있다.</br>
+ReceiveDamage의 매개변수는 OnTakeAnyDamage의 델리게이트 타입 FTakeAnyDamageSignature가 받는 변수들이다.</br>
+현재 체력인 Health는 복제 속성으로 값이 변동되면 클라이언트로 복제되어 클라이언트 환경에서 OnRep_Health 함수를 실행하게 된다.</br></br>
+
+ReceiveDamage는 서버 환경에서 실행되고, OnRep_Health는 클라이언트 환경에서 실행된다.</br>
+이번 게임에서는 힐킷을 따로 구현하지 않을 예정으로 현재 체력이 바뀌는 경우는 피해를 입을 경우밖에 없으므로 멀티캐스트 RPC를 하나 줄일 수 있는 기회다.</BR>
+AProjectile::OnHit 에 있는 ``` BlasterCharacter->MulticastHit() ``` 를 서버와 클라이언트 환경에 구분하여 MulticastHit 함수가 실행하는 내용을 적어주면 된다.</br>
+
+```
+void ABlasterCharacter::ReceiveDamage(AActor* DamagedActor, float Damage, const UDamageType* DamageType, AController* InstigatorController, AActor* DamageCauser)
+{
+	Health = FMath::Clamp(Health - Damage, 0.f, MaxHealth);
+
+	UpdateHUDHealth();
+	PlayHitReactMontage();
+
+	if (Health == 0.f)
+	{
+		// 죽음 처리하기
+	}
+}
+
+void ABlasterCharacter::OnRep_Health()
+{
+	UpdateHUDHealth();
+	PlayHitReactMontage();
+}
+```
+
+이렇게 작성하여 RPC하나를 줄였다. 만약 힐킷으로 인해 현재 체력이 바뀐다면 다른 방안을 사용해야할 것이다.</BR>
+이제 멀티캐스트 RPC를 사용하지 않고 모든 플레이어 화면에서 피격 애니메이션과 체력바에 데미지가 적용되는 것을 볼 수 있다.</BR></BR>
