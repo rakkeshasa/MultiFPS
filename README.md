@@ -1724,3 +1724,6 @@ void ABlasterCharacter::OnRep_Health()
 
 이렇게 작성하여 RPC하나를 줄였다. 만약 힐킷으로 인해 현재 체력이 바뀐다면 다른 방안을 사용해야할 것이다.</BR>
 이제 멀티캐스트 RPC를 사용하지 않고 모든 플레이어 화면에서 피격 애니메이션과 체력바에 데미지가 적용되는 것을 볼 수 있다.</BR></BR>
+
+![ApplyDamage](https://github.com/user-attachments/assets/23d7f0b9-913f-44ac-bff3-4fd67dd4dba1)
+<div align="center"><strong>피해를 입히는 모습</strong></div></BR></BR>
