@@ -1510,3 +1510,93 @@ FInterpTo 함수를 통해 현재 FOV에서 얼마만큼의 속도로 변화할�
 
 ![ZoomIn](https://github.com/user-attachments/assets/12632753-2bc8-40d8-8e6e-fa125014a1c0)
 <div align="center"><strong>조준 결과</strong></div></BR></BR>
+
+<strong><피격효과></strong>
+총알을 발사하여 캐릭터가 맞았으면 캐릭터는 피격 애니메이션을 취한다.</br>
+피격 처리 또한 서버에서 처리하고 서버에 접속중인 모든 클라이언트에 복제하여 결과를 공유해 줘야한다.</br>
+리슨 서버 환경에 있는 플레이어도 다른 모든 클라이언트에게도 애니메이션을 재생해야하므로 멀티캐스트 NPC가 적절한 방법이다.</BR>
+
+```
+void AProjectile::BeginPlay()
+{
+	Super::BeginPlay();
+
+	if (HasAuthority())
+	{
+		CollisionBox->OnComponentHit.AddDynamic(this, &AProjectile::OnHit);
+	}
+}
+
+void AProjectile::OnHit(UPrimitiveComponent* HitComp, AActor* OtherActor, UPrimitiveComponent* OtherComp, FVector NormalImpulse, const FHitResult& Hit)
+{
+	ABlasterCharacter* BlasterCharacter = Cast<ABlasterCharacter>(OtherActor);
+
+	if (BlasterCharacter)
+	{
+		BlasterCharacter->MulticastHit();
+	}
+	Destroy();
+}
+
+void ABlasterCharacter::MulticastHit_Implementation()
+{
+	PlayHitReactMontage();
+}
+```
+
+총알을 담당하는 Projectile 클래스는 BeginPlay에서 HasAuthority를 체크해 서버 환경에서만 총알이 충돌 처리를 하도록 하여 OnHit이 서버 환경에서만 호출되는 것을 확인할 수 있다.</br>
+OnHit 함수는 피격 대상을 확인하고 피격 대상의 멀티캐스트 RPC인 MulticastHit 함수를 호출한다.</br>
+서버 환경에서 멀티캐스트 RPC를 호출했으므로 서버에 있는 플레이어와 모든 클라이언트의 플레이어는 MulticastHit함수의 내용을 실행하게 된다.</br>
+PlayHitReactMontage 함수가 모든 컴퓨터의 플레이어에게서 실행되므로 피격된 플레이어의 피격 애니메이션이 보이게 된다.</br></br>
+
+![Hit](https://github.com/user-attachments/assets/2e5bffa8-53fc-4207-a15e-c41e9e3cfac4)
+<div align="center"><strong>모든 플레이어에게 공유되는 피격효과</strong></div></BR></BR>
+
+<strong><자동 화기 구현하기></strong>
+총기를 사격할 때 사격 버튼을 누르는 것을 복제 속성으로 처리할지 아니면 RPC로 처리할지 위에서 고민했으며, 자동화기의 경우 복제 속성으로 구현하기에는 어울리지 않아 RPC로 사격 처리를 하였다.</BR>
+매 틱마다 사격 클릭이 눌렸는지 체크하고 눌렸으면 멀티캐스트 RPC를 통해 총을 발사하고 총알을 발사하는 애니메이션을 재생하도록 했다.</BR>
+자동화기를 구현하기 위해서는 사격 처리를 하는 함수를 매번 불러 사격 애니메이션과 총에서 총알이 나가도록 해줘야한다.</br>
+또한 사격 간의 시간을 두어 연사 속도를 조절할 수 있어야 하며 일정 시간이 되면 총알이 또 나가도록 해야하고 그 전까지는 총알이 절대 나가서는 안된다.</br>
+
+```
+void UCombatComponent::Fire()
+{
+	if (bCanFire)
+	{
+		bCanFire = false;
+		ServerFire(HitTarget);
+		StartFireTimer();
+	}
+}
+
+void UCombatComponent::StartFireTimer()
+{
+	Character->GetWorldTimerManager().SetTimer(
+		FireTimer,
+		this,
+		&UCombatComponent::FireTimerFinished,
+		EquippedWeapon->FireDelay
+	);
+}
+
+void UCombatComponent::FireTimerFinished()
+{
+	bCanFire = true;
+
+	if (bFireButtonPressed && EquippedWeapon->bAutomatic)
+	{
+		Fire();
+	}
+}
+```
+
+여기서 Fire함수는 사격 클릭과 연동된 함수이며, ServerFire는 멀티캐스트 RPC를 호출하여 사격 애니메이션을 출력하고 총알이 나가도록 하는 역할을 한다.</BR>
+bCanFire 변수는 일정 시간이 되면 true값을 가져 총알이 나가도록 하고 총알이 나가면 바로 false값이 되어 일정 시간이 지나지 않으면 총을 쏘지 못한다.</br>
+따라서 bCanFire 변수는 총알을 쏠 수 있는지 제어해주는 역할을 하게 되며 초기화 시 무조건 true값을 가져야 첫 발이 나갈 수 있다.</br>
+StartFireTimer은 FireDelay로 지정해둔 시간만큼 지난다면 FireTimerFinished를 호출하고, FireTimerFinished는 bCanFire을 true값으로 세팅하여 총을 쏠 수 있게 한다.</br>
+일정 시간이 지난 뒤에 다시 호출 된 Fire 함수는 bCanFire값을 확인하고 true면 멀티캐스트 RPC를 통해 모든 플레이어에게 총을 쏘는 장면을 출력해준다.</BR>
+이후 bCanFire은 false값을 가져 사격 클릭을 통해 호출되는 Fire가 실행되도 일정시간 동안 총을 쏘지 못하게 된다.</BR></BR>
+
+코드에서 ``` EquippedWeapon->FireDelay ``` 와 ``` EquippedWeapon->bAutomatic ```를 볼 수 있다.</BR>
+총기마다 연사 속도와 자동화기인지 지정할 수 있게 하여 스나이퍼 라이플은 연사가 안되게하거나 샷건은 연사 속도를 느리게하는것처럼 총마다 차별점을 두었다.</BR></BR>
+
