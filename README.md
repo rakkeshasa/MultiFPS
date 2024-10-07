@@ -1845,3 +1845,97 @@ RequestRespawn 함수에서는 AllPlayerStarts 배열에 모든 PlayerStart 클�
 StockedDistances 배열에는 이제 각 스폰 지점마다 가장 가까운 캐릭터의 거리가 들어가 있으며, 여기서 가장 먼 거리를 갖는 스폰 포인트를 정해 해당 지점에서 부활할 수 있도록했다.</BR>
 RestartPlayerAtPlayerStart을 통해 계산으로 정한 스폰지점에 캐릭터를 부활시키고, 분리시킨 컨트롤러를 다시 연결해준다.</br>
 서버에 플레이어가 다시 생성되고 Actor는 복제 속성을 갖고 있으므로 재생성되자마자 클라이언트에서도 복제되어 클라이언트 화면에서도 부활한 플레이어를 볼 수 있다.</br></br>
+
+<strong><점수 시스템></strong></br>
+상대 플레이어를 처치하면 점수를 얻게 되며, 반대로 내가 죽으면 상대 플레이어한테 점수가 들어가게 된다.</br>
+어떤 플레이어가 일정 점수에 도달하면 승자가 되고, 그 판은 끝나게 된다.</br>
+
+![scoresystem](https://github.com/user-attachments/assets/cbd2135e-8995-4b79-a917-8e1f0298c9c1)
+<div align="center"><strong>팀포트리스2의 점수판</strong></div></BR></BR>
+
+플레이어가 갖는 점수나 데스 수와 같은 정보는 PlayerState 클래스에서 작업하기 적합하다.</br>
+대표적으로 점수를 의미하는 score 변수는 PlayerState 클래스에서 Replicated 속성을 갖는 변수로 Get, Set함수를 지원해준다.</br>
+PlayerState에서는 점수판에 적용할 수치들을 복제 속성 변수로 두고 값이 변경될 때마다 복제되어 각 클라이언트의 HUD에 수치가 업데이트 되도록 해줄것이다.</BR>
+
+```
+void ABlasterPlayerState::GetLifetimeReplicatedProps(TArray< FLifetimeProperty >& OutLifetimeProps) const
+{
+	DOREPLIFETIME(ABlasterPlayerState, Defeats);
+}
+
+void ABlasterPlayerState::AddToScore(float ScoreAmount)
+{
+	SetScore(GetScore() + ScoreAmount);
+
+	if (Controller)
+	{
+		Controller->SetHUDScore(GetScore());
+	}
+}
+
+void ABlasterPlayerState::OnRep_Score()
+{
+	Super::OnRep_Score();
+
+	Controller = Controller == nullptr ? Cast<ABlasterPlayerController>(Character->Controller) : Controller;
+	if (Controller)
+	{
+		Controller->SetHUDScore(GetScore());
+	}
+}
+```
+
+score은 언리얼엔진에서 제공하는 PlayerState 클래스에 이미 복제 속성 변수로 만들어져 있으나, 데스 수를 의미하는 Defeats은 없으므로 따로 복제 속성으로 만들어줘야한다.</br>
+엔진에서 제공하는 변수이므로 Set과 Get을 써서 쉽게 점수를 계산할 수 있으며, 컨트롤러는 HUD에 접근이 쉬우므로 컨트롤러를 통해 HUD에 있는 score 텍스트를 수정해준다.</br>
+AddToScore 함수는 플레이어가 죽으면 가해자가 호출하는 함수로 GameMode 클래스에서 호출되는 함수다.</br>
+GameMode는 서버 환경에서만 존재하므로 GamoeMode에서 AddToScore 함수를 호출하면 함수의 내용은 서버에서밖에 실행되지 않는다.</br>
+따라서 OnRep_Score을 통해 클라이언트 HUD에도 Score 텍스트를 수정할 수 있게 해준다.</br></br>
+
+```
+void ABlasterGameMode::PlayerEliminated(class ABlasterCharacter* ElimmedCharacter, class ABlasterPlayerController* VictimController, ABlasterPlayerController* AttackerController)
+{
+	ABlasterPlayerState* AttackerPlayerState = AttackerController ? Cast<ABlasterPlayerState>(AttackerController->PlayerState) : nullptr;
+	ABlasterPlayerState* VictimPlayerState = VictimController ? Cast<ABlasterPlayerState>(VictimController->PlayerState) : nullptr;
+	
+	if (AttackerPlayerState && AttackerPlayerState != VictimPlayerState)
+	{
+		AttackerPlayerState->AddToScore(1.f);
+	}
+
+	if (VictimPlayerState)
+	{
+		VictimPlayerState->AddToDefeats(1);
+	}
+
+	if (ElimmedCharacter)
+	{
+		ElimmedCharacter->Elim();
+	}
+}
+```
+
+PlayerState에서 구현한 함수는 GameMode 클래스에서 호출하게 되고 복제 속성 변수의 값을 변경하면서 서버와 클라이언트의 HUD를 업데이트 해주게된다.</BR>
+문제점으로는 PlayerState가 Character가 생성되자마자 바로 생성되지 않고 1~2프레임 후에 생성이 되어 게임을 시작하거나 캐릭터가 부활할 경우 PlayerState가 존재하지 않아 HUD가 업데이트 되지 않는다.</BR>
+
+```
+void ABlasterCharacter::Tick(float DeltaTime)
+{
+	Super::Tick(DeltaTime);
+
+	if (BlasterPlayerState == nullptr)
+	{
+		BlasterPlayerState = GetPlayerState<ABlasterPlayerState>();
+		if (BlasterPlayerState)
+		{
+			BlasterPlayerState->AddToScore(0.f);
+			BlasterPlayerState->AddToDefeats(0);
+		}
+	}
+}
+```
+따라서 BeginPlay 에서 PlayerState를 체크할 수 없으니 Tick 함수에서 매 틱마다 PlayerState가 존재하는지 체크하고 없으면 
+PlayerState를 세팅하여 Score과 Defeats 변수에 0을 더하여 값을 변경시켜 복제가 일어나도록 한다.</br>
+BlasterPlayerState가 없는 경우는 게임을 시작하거나 캐릭터가 부활할때로 변수들을 복제시켜 다시 정상적으로 HUD의 점수판이 업데이트 되도록해준다.</BR></BR>
+
+![result](https://github.com/user-attachments/assets/b43e03e0-96f9-4d18-9476-2e3f05d59522)
+<div align="center"><strong>구현 결과</strong></div></BR></BR>
