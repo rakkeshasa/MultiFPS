@@ -1843,4 +1843,5 @@ void ABlasterGameMode::RequestRespawn(ACharacter* ElimmedCharacter, AController*
 RequestRespawn 함수에서는 AllPlayerStarts 배열에 모든 PlayerStart 클래스 Actor 요소를 가지고 있고, Characters 배열에는 살아있는 캐릭터들의 요소를 가지고 있다.</br>
 각 스폰 지점마다 플레이어들의 거리를 측정하여 가장 가까운 거리에 있는 캐릭터의 거리를 배열에 저장한다.</br>
 StockedDistances 배열에는 이제 각 스폰 지점마다 가장 가까운 캐릭터의 거리가 들어가 있으며, 여기서 가장 먼 거리를 갖는 스폰 포인트를 정해 해당 지점에서 부활할 수 있도록했다.</BR>
-RestartPlayerAtPlayerStart을 통해 계산으로 정한 스폰지점에 캐릭터를 부활시키고, 분리시킨 컨트롤러를 다시 연결해준다.</br></br>
+RestartPlayerAtPlayerStart을 통해 계산으로 정한 스폰지점에 캐릭터를 부활시키고, 분리시킨 컨트롤러를 다시 연결해준다.</br>
+서버에 플레이어가 다시 생성되고 Actor는 복제 속성을 갖고 있으므로 재생성되자마자 클라이언트에서도 복제되어 클라이언트 화면에서도 부활한 플레이어를 볼 수 있다.</br></br>
