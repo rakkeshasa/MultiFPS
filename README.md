@@ -1624,7 +1624,8 @@ Pawn클래스(플레이어 캐릭터)는 서버와 모든 클라이언트에 존
 클라이언트는 게임 스테이트, 모든 플레이어의 Player State, Pawn을 갖지만 Player Controller는 자기 자신의 것만 갖는다.</br>
 이제 기능을 구현할 차례이다.</br></br>
 
-<strong><체력 시스템></strong>
+<strong><체력 시스템></strong></BR>
+
 체력은 총알에 맞으면 닳고, 힐이나 힐팩을 먹으면 차며, 0이 되면 죽는 기본적인 게임 시스템이다.</br>
 체력 시스템은 Player State에 구현하는 것이 적합해 보이나 캐릭터 클래스에 구현할 것이다.</br>
 Player State는 네트워크 업데이트가 느려 체력 상태를 모든 클라이언트들에게 즉각적으로 반영하기 힘들다는 단점이 있다.</br>
@@ -1727,3 +1728,119 @@ void ABlasterCharacter::OnRep_Health()
 
 ![ApplyDamage](https://github.com/user-attachments/assets/23d7f0b9-913f-44ac-bff3-4fd67dd4dba1)
 <div align="center"><strong>피해를 입히는 모습</strong></div></BR></BR>
+
+체력이 다 닳아서 0이 되면 플레이어는 죽고 다시 PlayerStart 지점에서 부활해야한다.</br>
+플레이어가 죽으면 죽는 애니메이션과 게임의 점수가 올라가고 플레이어의 데스 수를 기록해야하므로 GameMode가 필요할 때다.</br>
+우선은 데미지가 들어와 현재 체력이 0이 되는 순간 GameMode를 통해 플레이어에게 죽음 판정을 주기 위해 적절한 조치를 취해야한다.</br>
+데미지는 ApplyDamage함수에서 데미지를 주면 ReceiveDamage에서 데미지를 입었다는 정보를 갖고 현재 체력에 데미지를 적용했다.</br>
+
+```
+void ABlasterCharacter::ReceiveDamage(AActor* DamagedActor, float Damage, const UDamageType* DamageType, AController* InstigatorController, AActor* DamageCauser)
+{
+	if (Health == 0.f)
+	{
+		ABlasterGameMode* BlasterGameMode = GetWorld()->GetAuthGameMode<ABlasterGameMode>();
+		if (BlasterGameMode)
+		{
+			BlasterPlayerController = BlasterPlayerController == nullptr ? Cast<ABlasterPlayerController>(Controller) : BlasterPlayerController;
+			ABlasterPlayerController* AttackerController = Cast<ABlasterPlayerController>(InstigatorController);
+			BlasterGameMode->PlayerEliminated(this, BlasterPlayerController, AttackerController);
+		}
+	}
+}
+
+void ABlasterCharacter::Elim()
+{
+	Combat->EquippedWeapon->Dropped();
+	MulticastElim();
+
+	GetWorldTimerManager().SetTimer(
+		ElimTimer,
+		this,
+		&ABlasterCharacter::ElimTimerFinished,
+		ElimDelay
+	);
+}
+
+void ABlasterCharacter::MulticastElim_Implementation()
+{
+	bElimmed = true;
+	PlayElimMontage();
+
+	GetCharacterMovement()->DisableMovement();
+	GetCharacterMovement()->StopMovementImmediately();
+
+	if (BlasterPlayerController)
+	{
+		DisableInput(BlasterPlayerController);
+	}
+
+	GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	GetMesh()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+}
+```
+
+ReceiveDamage에서 데미지 계산이 끝난 현재 체력이 0이 된다면 GameMode에 있는 PlayerEliminated를 호출한다.</br>
+PlayerEliminated는 다시 BlasterCharacter 클래스에 있는 Elim 함수를 호출하는데 GameMode에서 호출되므로 서버 환경에서 실행하게된다.</br>
+서버 환경에서 실행되는 Elim 함수는 플레이어가 가지고 있는 무기를 캐릭터에게서 분리시키고, 죽는 애니메이션이 클라이언트와 서버 환경에서 보일 수 있도록 멀티캐스트 RPC를 사용했다.</BR>
+죽으면 몇 초 후에 다시 부활할 수 있도록 ElimTimer를 지정했고 지정된 시간이 되면 ElimTimerFinished 콜백 함수에서 캐릭터를 부활시킬 것이다.</br></br>
+
+캐릭터가 죽으면 화면상에서 캐릭터만 사라질 뿐 컨트롤러는 존재한다.</br>
+따라서 키보드나 마우스 입력을 통해 조작이 가능하므로 캐릭터의 움직임을 봉인하고 입력 또한 막아야한다.</br>
+MovementComponent에 있는 함수를 통해 움직임을 봉인하고, DisableInput을 통해 캐릭터에 연결된 컨트롤러의 입력을 막았다.</br>
+또한 캐릭터가 죽는 애니메이션을 출력하는 동안 콜리전이 계속 존재하는 문제를 해결하기 위해 콜리전을 없앴다.</br></br>
+
+캐릭터가 죽는 과정을 GameMode에서 진행했듯이 부활하는 과정도 GameMode에서 진행하여 서버 환경에서 부활시스템이 진행되도록 해야한다.</br>
+ElimTimer가 지정된 시간이 된다면 ElimTimerFinished 콜백 함수에서 GameMode에 있는 RequestRespawn함수를 통해 플레이어를 부활시킬 것이다.</br>
+부활을 한다면 어느 지점에서 부활할지 정해야하고, 컨트롤러를 다시 부착시켜 캐릭터가 입력을 받을 수 있게해야한다.</br>
+
+```
+void ABlasterCharacter::ElimTimerFinished()
+{
+	BlasterGameMode->RequestRespawn(this, Controller);
+}
+
+void ABlasterGameMode::RequestRespawn(ACharacter* ElimmedCharacter, AController* ElimmedController)
+{
+	// 플레이어들한테 가장 먼 부활 포인트에서 부활
+	TArray<AActor*>AllPlayerStarts;
+	UGameplayStatics::GetAllActorsOfClass(this, APlayerStart::StaticClass(), AllPlayerStarts);
+
+	TArray<AActor*>Characters;
+	UGameplayStatics::GetAllActorsOfClass(this, ABlasterCharacter::StaticClass(), Characters);
+
+	for (int i = 0; i < AllPlayerStarts.Num(); i++)
+	{
+		float MinDistance = (AllPlayerStarts[i]->GetActorLocation() - Characters[0]->GetActorLocation()).Size();
+
+		for (int j = 1; j < Characters.Num(); j++)
+		{
+			float Distance = (AllPlayerStarts[i]->GetActorLocation() - Characters[j]->GetActorLocation()).Size();
+			if (Distance < MinDistance)
+			{
+				MinDistance = Distance;
+			}
+		}
+		StockedDistances.Add(MinDistance);
+	}
+
+	float MaxDistance = StockedDistances[0];
+
+	for (int i = 1; i < StockedDistances.Num(); i++)
+	{
+		if (MaxDistance < StockedDistances[i])
+		{
+			MaxDistance = StockedDistances[i];
+			Selection = i;
+		}
+	}
+
+	RestartPlayerAtPlayerStart(ElimmedController, AllPlayerStarts[Selection]);
+}
+```
+
+부활 지점은 다른 플레이어에게서 가장 멀리 있는 스폰 포인트로 
+RequestRespawn 함수에서는 AllPlayerStarts 배열에 모든 PlayerStart 클래스 Actor 요소를 가지고 있고, Characters 배열에는 살아있는 캐릭터들의 요소를 가지고 있다.</br>
+각 스폰 지점마다 플레이어들의 거리를 측정하여 가장 가까운 거리에 있는 캐릭터의 거리를 배열에 저장한다.</br>
+StockedDistances 배열에는 이제 각 스폰 지점마다 가장 가까운 캐릭터의 거리가 들어가 있으며, 여기서 가장 먼 거리를 갖는 스폰 포인트를 정해 해당 지점에서 부활할 수 있도록했다.</BR>
+RestartPlayerAtPlayerStart을 통해 계산으로 정한 스폰지점에 캐릭터를 부활시키고, 분리시킨 컨트롤러를 다시 연결해준다.</br></br>
