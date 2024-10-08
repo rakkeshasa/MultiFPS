@@ -1036,7 +1036,10 @@ CombatComponent클래스에 무기 장착을 담당할 EquipWeapon은 플레이�
 ```
 void UCombatComponent::EquipWeapon(AWeapon* WeaponToEquip)
 {
-	if (Character == nullptr || WeaponToEquip == nullptr) return;
+	if (EquippedWeapon)
+	{
+		EquippedWeapon->Dropped();
+	}
 
 	EquippedWeapon = WeaponToEquip;
 	EquippedWeapon->SetWeaponState(EWeaponState::EWS_Equipped);
@@ -1599,6 +1602,146 @@ StartFireTimer은 FireDelay로 지정해둔 시간만큼 지난다면 FireTimerF
 
 코드에서 ``` EquippedWeapon->FireDelay ``` 와 ``` EquippedWeapon->bAutomatic ```를 볼 수 있다.</BR>
 총기마다 연사 속도와 자동화기인지 지정할 수 있게 하여 스나이퍼 라이플은 연사가 안되게하거나 샷건은 연사 속도를 느리게하는것처럼 총마다 차별점을 두었다.</BR></BR>
+
+<strong><탄창 구현></strong></br>
+총은 탄창에 있는 총알만큼 쏠 수 있고, 탄창에 있는 총알을 다 쓰면 탄창을 갈아주는 재장전이 필요하다.</br>
+그러기 위해서는 탄창에 있는 총알이 얼마나 남아있고, 내가 가지고 있는 탄은 몇개가 있는지 알아야하며 모든 것은 서버에서 통제한다.</br>
+서버에서 탄알을 소모하고 재장전하여 다시 충전시킨 것을 클라이언트에게 전달하기 위해서는 탄알이 복제 속성을 가지고 있어야 하며, 그래야 탄알의 개수가 바뀔 때 클라이언트에게 복제가 된다.</br>
+
+```
+void AWeapon::Fire(const FVector& HitTarget)
+{
+	WeaponMesh->PlayAnimation(FireAnimation, false);
+	SpendAmmo();
+}
+
+void AWeapon::SpendAmmo()
+{
+	Ammo = FMath::Clamp(Ammo - 1, 0, MagCapacity);
+	SetHUDAmmo();
+}
+
+void AWeapon::OnRep_Ammo()
+{
+	SetHUDAmmo();
+}
+
+void AWeapon::OnRep_Owner()
+{
+	Super::OnRep_Owner();
+
+	if (Owner == nullptr)
+	{
+		BlasterOwnerCharacter = nullptr;
+		BlasterOwnerController = nullptr;
+	}
+	else
+	{
+		SetHUDAmmo();
+	}
+}
+```
+
+우선 총을 쏘면 탄창에 있는 탄알 수 Ammo를 줄여야한다.</br>
+탄창에 있는 탄알의 수는 0보다 작을 수는 없고, 탄창이 가질 수 있는 최대 탄알 수를 넘을 수 없다.</br>
+계산 된 탄알 수는 각 플레이어의 HUD에 표시되게 되고 클라이언트에도 정상적으로 출력되기 위해 콜백 함수에서 처리해준다.</BR></BR>
+
+또한 게임 시작시 탄알이 0으로 시작되고 총을 줍는 순간 총에 있는 탄알을 화면상에 표시하여 플레이어가 몇 개의 탄을 가지고 있는지 알아야한다.</br>
+서버 환경에서 EquipWeapon 함수를 호출하면 SetUHDAmmo를 통해 서버 환경에서는 쉽게 출력할 수 있지만, 클라이언트 환경에서는 총을 가지고 있는 Owner의 컨트롤러를 가져와 화면상에 출력해줘야한다.</BR>
+따라서 총의 Owner가 바뀌면 해당 Owner의 컨트롤러에 접근하여 화면상에 총의 탄알 수를 출력해줘야한다.</br>
+여기서 Owner는 Actor 클래스의 복제 속성 변수로 OnRep_Owner 콜백 함수를 지원하고 있으므로, 클라이언트 환경의 경우 콜백 함수를 이용하여 화면 상에 총알 수를 출력한다.</br></br>
+
+즉, 총알을 쏘거나 바닥에 있는 총을 줍는 2가지 경우에 탄알 수를 화면상에 업데이트 해주고있다.</br></br>
+탄창에 있는 총알을 다 쏘게 되면 더 이상 쏠 수 없으며 자신이 가진 탄알을 탄창에 넣고 재장전해야한다.</br>
+
+```
+bool UCombatComponent::CanFire()
+{
+	if (EquippedWeapon == nullptr) return false;
+
+	return !EquippedWeapon->IsEmpty() && bCanFire && CombatState == ECombatState::ECS_Unoccupied;
+}
+```
+
+더 이상 총기의 자동 발사 타이머에 따라 변하는 bCanFire 변수에 맞춰 총을 쏘는게 아니라 다른 요소도 고려하여 총을 쏴야한다는 것이다.</br>
+이제는 bCanFire가 true고, 탄알이 0개가 아니고 재장전 중인 상태가 아니라면 총을 쏠 수 있다.</br></br>
+
+재장전은 클라이언트가 재장전 버튼을 누르면 서버에 요청하여 서버 환경에서 탄창을 채우고 이것을 복제하여 클라이언트에게 다시 전달해야한다.</br>
+따라서 서버RPC를 이용해야 하고, 소유한 탄알이 있고 재장전중인 상태가 아니라면 서버RPC를 통해 더 이상 격발하지 않도록 전투 상태를 바꾸고 재장전 애니메이션을 출력한다.</BR>
+
+```
+void UCombatComponent::Reload()
+{
+	if (CarriedAmmo > 0 && CombatState != ECombatState::ECS_Reloading)
+	{
+		ServerReload();
+	}
+}
+
+void UCombatComponent::ServerReload_Implementation()
+{
+	CombatState = ECombatState::ECS_Reloading;
+	HandleReload();
+}
+
+void UCombatComponent::FinishReloading()
+{
+	if (Character->HasAuthority())
+	{
+		CombatState = ECombatState::ECS_Unoccupied;
+		UpdateAmmoValues();
+	}
+
+	// 재장전 후 사격 버튼이 눌려있다면
+	if (bFireButtonPressed)
+	{
+		Fire();
+	}
+}
+```
+
+재장전 애니메이션이 끝나면 AnimNotify를 통해 FinishReloading 함수가 호출된다.</br>
+서버 환경에 있는 캐릭터의 전투 상태를 ECS_Reloading에서 ECS_Unoccupied로 값을 변경시켜 복제가 일어나 클라이언트 환경에 있는 캐릭터의 전투 상태가 변경된다.</br>
+이후 재장전으로 탄창에 총알을 다시 채워진 상태를 구현하기 위해 UpdateAmmoValues를 호출하게 된다.</br></br>
+
+게임에서 보통 재장전을 누르면 탄창에 가득 탄알을 채워주거나, 자신이 가진 탄알 내에서 탄창을 채워주게 된다.</br>
+기본적으로 탄창을 가득 채워주되, 채워진 탄알 수는 내가 가진 탄알 수를 넘으면 안된다.</br>
+탄창에 빈 탄알 수와 내가 가진 탄알 수 중 더 작은 값을 골라 재장전을 해줘야한다.</br></br>
+
+```
+int32 UCombatComponent::AmountToReload()
+{
+	// 탄알집에 빈 탄알 수
+	int32 RoomInMag = EquippedWeapon->GetMagCapacity() - EquippedWeapon->GetAmmo();
+	
+	if (CarriedAmmoMap.Contains(EquippedWeapon->GetWeaponType()))
+	{
+		int32 AmountCarried = CarriedAmmoMap[EquippedWeapon->GetWeaponType()];
+		int32 Least = FMath::Min(RoomInMag, AmountCarried);
+		return FMath::Clamp(RoomInMag, 0, Least);
+	}
+	return 0;
+}
+
+void UCombatComponent::UpdateAmmoValues()
+{
+	int32 ReloadAmount = AmountToReload();
+	if (CarriedAmmoMap.Contains(EquippedWeapon->GetWeaponType()))
+	{
+		CarriedAmmoMap[EquippedWeapon->GetWeaponType()] -= ReloadAmount;
+		CarriedAmmo = CarriedAmmoMap[EquippedWeapon->GetWeaponType()];
+	}
+
+	Controller->SetHUDCarriedAmmo(CarriedAmmo);
+	EquippedWeapon->AddAmmo(ReloadAmount);
+}
+```
+
+AmountToReload는 몇 개의 탄알을 재장전 시 소모할 것인지 계산해주는 함수로 RoomInMag는 장착한 총의 탄창에서 빈 탄알 수이다.</br>
+CarriedAmmoMap은 Map형식으로 각 총기별로 내가 소지한 탄알 수로 재장전에 필요한 탄알 수만큼 빼고 탄창을 채워준다.</br>
+AddAmmo에서 총에 총알을 보충하고 총에 장전된 총알의 수를 화면상에 출력해준다.</BR></BR>
+
+
 
 ## 게임 시스템 구현
 게임 시스템은 플레이어 체력, 죽음, 부활과 같은 기능을 처리하는 게임 전반적인 시스템이다.</BR>
