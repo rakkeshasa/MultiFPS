@@ -2082,3 +2082,60 @@ BlasterPlayerState가 없는 경우는 게임을 시작하거나 캐릭터가 �
 
 ![result](https://github.com/user-attachments/assets/b43e03e0-96f9-4d18-9476-2e3f05d59522)
 <div align="center"><strong>구현 결과</strong></div></BR></BR>
+
+GameModeBase VS GameMode
+GameModeBase는 GameMode의 모든 기본 기능을 갖고 있다.</br>
+기본 기능으로는 Default Class, PlayerController, HUD등이 있다.</BR>
+게임 시작 시 플레이어의 Pawn을 실제로 스폰하는 것을 처리하고, 플레이어를 Restart하여 효과적으로 플레이어를 리스폰하고 게임을 재시작할 수 있다.</br></br>
+
+GameMode는 GameModeBase를 상속받는 자식 클래스로 모든 속성을 상속받는다.
+별도로 Match States를 갖고 있으며 다양한 매치 상태를 정의하고 처리하는 기능이 있으며, 사용자 임의의 매치 상태도 생성할 수 있다.</br></br>
+
+매치 상태인 Match States는 모든 게임 타입에 적용할 필요는 없다.</br>
+Match States가 필요하면 GameMode를 사용하면 되고, 필요가 없다면 GameModeBase를 사용하면 된다.</br>
+GameMode에는 MatchState라는 네임스페이스가 있는데 그 안에 Match 단계에 따라 다양한 State가 FName으로 저장돼있다.</BR>
+
+```
+namespace MatchState
+{
+	extern ENGINE_API const FName EnteringMap;			// We are entering this map, actors are not yet ticking
+	extern ENGINE_API const FName WaitingToStart;		// Actors are ticking, but the match has not yet started
+	extern ENGINE_API const FName InProgress;			// Normal gameplay is occurring. Specific games will have their own state machine inside this state
+	extern ENGINE_API const FName WaitingPostMatch;		// Match has ended so we aren't accepting new players, but actors are still ticking
+	extern ENGINE_API const FName LeavingMap;			// We are transitioning out of the map to another location
+	extern ENGINE_API const FName Aborted;				// Match has failed due to network issues or other problems, cannot continue
+
+	// If a game needs to add additional states, you may need to override HasMatchStarted and HasMatchEnded to deal with the new states
+	// Do not add any states before WaitingToStart or after WaitingPostMatch
+}
+```
+
+<strong>EnteringMap<strong/>: 게임 모드가 레벨에 처음 진입할 때</br>
+<strong>WaitingToStart<strong/>: 게임 모드가 Default Pawn 클래스를 아직 Spawn하지 않은 상태</br>
+<strong>InProgress<strong/>: 모든 Default Pawn이 생성되고 플레이어가 해당 Pawn들을 제어할 수 있게 되면서 게임이 실제로 실행됨.</br>
+<strong>WaitingPostMatch<strong/>: WaitingStart와 비슷하지만 게임이 끝난 상태</br>
+<strong>LeavingMap<strong/>: 게임 모드가 실제로 맵을 종료하는 시점</br>
+<strong>Aborted<strong/>: 매치가 중단된 경우</br>
+<strong>Custom Match State: 사용자 지정 Match State. <strong>WaitingToStart와 InProgress 사이에 추가<strong/> 가능하다.</br></br>
+
+게임 모드는 순차적으로 상태를 진행하고 여기서 플레이어 입장 대기 시간이나 매치가 끝난 후 쿨타임을 가지는 시간을 갖도록 Custom Match State를 몇개 만들것이다.</br></br>
+
+```
+void AGameMode::OnMatchStateSet()
+{
+	FGameModeEvents::OnGameModeMatchStateSetEvent().Broadcast(MatchState);
+	// Call change callbacks
+	if (MatchState == MatchState::WaitingToStart)
+	{
+		HandleMatchIsWaitingToStart();
+	}
+	else if (MatchState == MatchState::InProgress)
+	{
+		HandleMatchHasStarted();
+	}
+	.
+	.
+	.
+}
+```
+각 매치 상태는 변경될때마다 델리게이트를 통해 브로드캐스트 되고 각 상태에 따라 콜백함수가 호출된다.</br>
