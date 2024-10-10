@@ -2083,7 +2083,12 @@ BlasterPlayerState가 없는 경우는 게임을 시작하거나 캐릭터가 �
 ![result](https://github.com/user-attachments/assets/b43e03e0-96f9-4d18-9476-2e3f05d59522)
 <div align="center"><strong>구현 결과</strong></div></BR></BR>
 
-GameModeBase VS GameMode
+<strong><시작 전 대기 시간></br></strong>
+캐릭터 픽창이나 맵 로딩 후에 바로 게임이 시작되지는 않는다.</br>
+게임이 시작되기 전에 안전구역이나 무적 상태에서 몇 초의 대기 시간을 갖고 게임이 시작된다.</br>
+이를 구현하기 위해 Match State를 이용할 것이다. Match State는 GameModeBase에는 없고 GameMode에만 있기 때문에 GameMode를 사용할 것이다.</br></br>
+
+GameModeBase VS GameMode</br>
 GameModeBase는 GameMode의 모든 기본 기능을 갖고 있다.</br>
 기본 기능으로는 Default Class, PlayerController, HUD등이 있다.</BR>
 게임 시작 시 플레이어의 Pawn을 실제로 스폰하는 것을 처리하고, 플레이어를 Restart하여 효과적으로 플레이어를 리스폰하고 게임을 재시작할 수 있다.</br></br>
@@ -2110,13 +2115,13 @@ namespace MatchState
 }
 ```
 
-<strong>EnteringMap<strong/>: 게임 모드가 레벨에 처음 진입할 때</br>
-<strong>WaitingToStart<strong/>: 게임 모드가 Default Pawn 클래스를 아직 Spawn하지 않은 상태</br>
-<strong>InProgress<strong/>: 모든 Default Pawn이 생성되고 플레이어가 해당 Pawn들을 제어할 수 있게 되면서 게임이 실제로 실행됨.</br>
-<strong>WaitingPostMatch<strong/>: WaitingStart와 비슷하지만 게임이 끝난 상태</br>
-<strong>LeavingMap<strong/>: 게임 모드가 실제로 맵을 종료하는 시점</br>
-<strong>Aborted<strong/>: 매치가 중단된 경우</br>
-<strong>Custom Match State: 사용자 지정 Match State. <strong>WaitingToStart와 InProgress 사이에 추가<strong/> 가능하다.</br></br>
+<strong>EnteringMap</strong>: 게임 모드가 레벨에 처음 진입할 때</br>
+<strong>WaitingToStart</strong>: 게임 모드가 Default Pawn 클래스를 아직 Spawn하지 않은 상태</br>
+<strong>InProgress</strong>: 모든 Default Pawn이 생성되고 플레이어가 해당 Pawn들을 제어할 수 있게 되면서 게임이 실제로 실행됨.</br>
+<strong>WaitingPostMatch</strong>: WaitingStart와 비슷하지만 게임이 끝난 상태</br>
+<strong>LeavingMap</strong>: 게임 모드가 실제로 맵을 종료하는 시점</br>
+<strong>Aborted</strong>: 매치가 중단된 경우</br>
+<strong>Custom Match State</strong>: 사용자 지정 Match State. <strong>WaitingToStart와 InProgress 사이에 추가</strong> 가능하다.</br></br>
 
 게임 모드는 순차적으로 상태를 진행하고 여기서 플레이어 입장 대기 시간이나 매치가 끝난 후 쿨타임을 가지는 시간을 갖도록 Custom Match State를 몇개 만들것이다.</br></br>
 
@@ -2138,4 +2143,334 @@ void AGameMode::OnMatchStateSet()
 	.
 }
 ```
-각 매치 상태는 변경될때마다 델리게이트를 통해 브로드캐스트 되고 각 상태에 따라 콜백함수가 호출된다.</br>
+
+각 매치 상태는 변경될때마다 브로드캐스트 되고 각 상태에 따라 콜백함수가 호출된다.</br>
+우선은 게임 시작 전에 대기할 대기 시간인 WarmupTime를 생성하고, 대기 상태를 만들기 위해 MatchState의 WaitingToStart를 이용할 것이다.</br>
+대기 시간을 원하는 시간 만큼 지정하고 ``` GetWorld()->GetTimeSeconds() ```을 이용하여 시간이 지난만큼 시간을 빼서 0초가 되면 다음 MatchState로 넘어가도록 해줄것이다.</br>
+시간 계산은 단순하나 멀티플레이를 해보면 각 플레이어들끼리 시간이 맞지 않는 문제점이 생긴다.</br>
+원인은 ``` GetWorld()->GetTimeSeconds() ``` 은 맵에 들어온 후 시간이 흘러가기 시작하는데 플레이어마다 맵에 들어오는데 걸리는 시간이 다르기 때문이다.</br>
+따라서 시간을 동기화해줄 필요가 있고, 게임을 동등한 시간으로 진행하기 위해 대기 상태가 필요하다.</br></br>
+
+시간을 동기화하기 위해 서버 플레이어 시간을 기준으로 다른 플레이어들 시간도 맞춘다.</br>
+이를 위해서는 클라이언트가 RPC를 통해 현재 서버 시간이 몇인지 알아내고, 서버가 다시 RPC를 통해 클라이언트의 요청을 받고 응답한 시간을 클라이언트에게 보내야한다.</BR>
+RPC를 이용하기때문에 네트워크 전송간에 소비된 시간이 존재하며, 소비된 시간까지 계산하여 클라이언트 시간을 맞춰줘야한다.</BR>
+즉, 클라이언트 요청 -> 서버의 응답 -> 클라이언트 응답 확인까지 하는데 걸리는 시간이 1RTT(Round Trip Time)라면 클라이언트는 <STRONG>서버의 응답 시간 + 1/2 RTT</STRONG>를 하면 서버와 시간이 같아진다.</BR>
+이 RTT를 계산하는 방법은 클라이언트가 요청을 보낸 시간과 서버의 응답을 받은 시간의 차이를 계산하여 클라이언트에서 쉽게 알 수 있다.</BR>
+
+```
+void ABlasterPlayerController::ReceivedPlayer()
+{
+	Super::ReceivedPlayer();
+
+	if (IsLocalController())
+	{
+		ServerRequestServerTime(GetWorld()->GetTimeSeconds());
+	}
+}
+
+void ABlasterPlayerController::ServerRequestServerTime_Implementation(float TimeOfClientRequest)
+{
+	// 서버 환경의 현재 시간
+	float ServerTimeOfReceipt = GetWorld()->GetTimeSeconds();
+	
+	ClientReportServerTime(TimeOfClientRequest, ServerTimeOfReceipt);
+}
+
+void ABlasterPlayerController::ClientReportServerTime_Implementation(float TimeOfClientRequest, float TimeServerReceivedClientRequest)
+{
+	float RoundTripTime = GetWorld()->GetTimeSeconds() - TimeOfClientRequest;
+	float CurrentServerTime = TimeServerReceivedClientRequest + (0.5f * RoundTripTime);
+	
+	ClientServerDelta = CurrentServerTime - GetWorld()->GetTimeSeconds();
+}
+
+float ABlasterPlayerController::GetServerTime()
+{
+	return GetWorld()->GetTimeSeconds() + ClientServerDelta;
+}
+```
+
+ReceivedPlayer 함수는 PlayerController 클래스에서 이미 구현된 함수로 PlayerController에 Viewport나 Net 연결이 된 후에 호출되는 함수로 클라이언트가 맵에 들어와 생성되자마자 바로 서버한테 시간을 물어볼 수 있게 한다.</br>
+서버 유저가 아니라면 RTT시간을 계산하기 위해 자신이 ServerRequestServerTime을 호출한 시간을 같이 입력에 넣어 호출한다.</br>
+서버 환경에서 실행되는 ServerRequestServerTime은 자신의 시간과 클라이언트가 요청한 시간을 담아 다시 클라이언트로 보낸다.</br>
+RPC를 통해 호출된 ClientReportServerTime에는 자신이 호출된 시간을 확인하여 요청 보낸 시간을 뺄셈하여 RTT에 걸린 시간을 계산한다.</BR>
+이후 서버의 응답 시간 + 1/2 RTT을 계산해 현재 서버 시간을 구하고 자신의 시간과 비교하여 얼마만큼 시간 차이가 나는지 구해준다.</BR></BR>
+
+클라이언트는 서버 시간과 동기화가 되어 모든 플레이어가 동일한 시간을 보고 플레이를 하게 된다.</BR>
+하지만 컴퓨터의 사양에 따라 시간이 느리게 흘러갈 수도 있으며, RTT를 절반으로 쪼개기는 했지만 클라이언트가 응답을 받는 시간이 서버로 요청을 보내는데 걸린 시간보다 더 걸렸을 수도 있다.</BR>
+게임이 진행되면서 시간 차이가 발생할 수 있으므로 적절한 시간마다 RPC를 통해 시간 체크를 해줘야한다.</BR>
+
+```
+void ABlasterPlayerController::CheckTimeSync(float DeltaTime)
+{
+	TimeSyncRunningTime += DeltaTime;
+	
+	if (IsLocalController() && TimeSyncRunningTime > TimeSyncFrequency)
+	{
+		ServerRequestServerTime(GetWorld()->GetTimeSeconds());
+		TimeSyncRunningTime = 0.f;
+	}
+}
+```
+
+Tick 함수에서 CheckTimeSync를 호출하여 정해진 시간마다 서버 시간을 구해 자신의 시간을 보정해주고 있다.</br>
+이제 MatchState가 WaitingToStart인지 확인하고 적절한 HUD를 출력하면서 시간 흘러가는 것을 보여주면 대기 상태 구현은 완료된다.</BR></BR>
+
+![wait](https://github.com/user-attachments/assets/8a44098d-fd94-41b9-9fa6-08d057a3820b)
+<div align="center"><strong>동기화 된 대기 시간</strong></div></BR></BR>
+
+```
+ABlasterGameMode::ABlasterGameMode()
+{
+	bDelayedStart = true;
+}
+
+void ABlasterGameMode::Tick(float DeltaTime)
+{
+	if (MatchState == MatchState::WaitingToStart)
+	{
+		CountdownTime = WarmupTime - GetWorld()->GetTimeSeconds() + LevelStartingTime;
+		if (CountdownTime <= 0.f)
+		{
+			StartMatch();
+		}
+	}
+}
+```
+
+bDelayedStart의 값을 true로 두면 게임을 바로 진행하지 않고 WaitingToStart 상태에 진입한다.</br>
+대기 시간이 끝나면 MatchState를 InProgress로 변경하여 게임을 진행해야한다.</br>
+StartMatch 함수는 GameMode에서 지원하는 함수로 MatchState를 InProgress로 변경시켜 게임이 진행되게 한다.</br>
+MatchState에 따라 보여주는 HUD를 다르게 하기 위해 HUD에 연결된 PlayerController가 MatchState를 알아야한다.</br>
+
+```
+void ABlasterGameMode::OnMatchStateSet()
+{
+	Super::OnMatchStateSet();
+
+	for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+	{
+		ABlasterPlayerController* BlasterPlayer = Cast<ABlasterPlayerController>(*It);
+		if (BlasterPlayer)
+		{
+			BlasterPlayer->OnMatchStateSet(MatchState);
+		}
+	}
+}
+
+void ABlasterPlayerController::OnMatchStateSet(FName State)
+{
+	MatchState = State;
+
+	// InProgress 상태라면 HUD 활성화(클라 환경에서도 해줘야함)
+	if (MatchState == MatchState::InProgress)
+	{
+		HandleMatchHasStarted();
+	}
+}
+
+void ABlasterPlayerController::OnRep_MatchState()
+{
+	if (MatchState == MatchState::InProgress)
+	{
+		HandleMatchHasStarted();
+	}
+}
+```
+
+GameMode 클래스에서 OnMatchStateSet 함수는 MatchState가 바뀌는 이벤트가 발생하면 MatchState를 브로드캐스트한다.</br>
+이 함수를 오버라이드 하여 MatchState가 바뀔 때마다 서버 환경에 있는 모든 PlayerController에 MatchState를 세팅해준다.</br>
+PlayerController가 서버와 클라이언트에 존재한다고 해서 모든 변수가 자동으로 복제되는 것은 아니므로 클라이언트의 PlayerController에도 MatchState를 복제하여 전달해야한다.</br>
+GameMode는 서버 환경으로 OnMatchStateSet은 서버 환경에서 실행이 되고 MatchState에 복제 속성을 달아 값이 변경될 때마다 복제하여 클라이언트에서도 같은 내용을 실행하여 상황에 맞는 HUD를 출력한다.</br></br>
+
+```
+void ABlasterPlayerController::Tick(float DeltaTime)
+{
+	PollInit();
+}
+
+void ABlasterPlayerController::PollInit()
+{
+	if (CharacterOverlay == nullptr)
+	{
+		if (BlasterHUD && BlasterHUD->CharacterOverlay)
+		{
+			CharacterOverlay = BlasterHUD->CharacterOverlay;
+			if (CharacterOverlay)
+			{
+				SetHUDHealth(HUDHealth, HUDMaxHealth);
+				SetHUDScore(HUDScore);
+				SetHUDDefeats(HUDDefeats);
+			}
+		}
+	}
+}
+```
+
+InProgress 상태로 넘어와 게임을 진행했으나 HUD에 세팅한 Score, Health가 정상적으로 출력되지 않았다.</br>
+이는 UserWidget이 아직 생성되지 않아 UserWidget에 있는 Score과 Health를 설정하지 못했기 때문에 발생했다.</br>
+따라서 InProgress 단계로 넘어오면 UserWidget이 있는지 체크하고 없다면 UserWidget을 설정한 후에 Score과 Health를 설정해야한다.</br></br>
+
+게임이 끝나면 최고 점수 플레이어를 창에 나타내고 다음 라운드로 넘어가거나 게임 메뉴로 돌아가게 된다.</br>
+최고 점수 플레이어를 표시하고 다음 라운드로 넘어가기 위해 단계를 하나 두어 알맞은 HUD와 다른 타이머가 돌아가게 해야한다.</BR>
+따라서 CustomState인 Cooldown을 InProgress와 WaitingPostMatch 사이에 배치하여 다음 라운드로 넘어가기 전에 해당 MatchState 절차를 갖도록 할 것이다.</br>
+
+```
+namespace MatchState
+{
+	const FName Cooldown = FName("Cooldown");
+}
+
+void ABlasterGameMode::Tick(float DeltaTime)
+{
+	if (MatchState == MatchState::WaitingToStart)
+	{
+		...
+	}
+	else if (MatchState == MatchState::InProgress)
+	{
+		CountdownTime = WarmupTime + MatchTime - GetWorld()->GetTimeSeconds() + LevelStartingTime;
+		if (CountdownTime <= 0.f)
+		{
+			SetMatchState(MatchState::Cooldown);
+		}
+	}
+	else if (MatchState == MatchState::Cooldown)
+	{
+		CountdownTime = CooldownTime + WarmupTime + MatchTime - GetWorld()->GetTimeSeconds() + LevelStartingTime;
+		if (CountdownTime <= 0.f)
+		{
+			RestartGame();
+		}
+	}
+}
+```
+
+게임 모드에서는 게임 시간이 다 흐르면 MatchState를 Cooldown 단계로 세팅하고 Cooldown의 시간도 다 흐르면 RestartGame을 통해 게임을 다시 시작시킨다.</br>
+MatchState가 Cooldown으로 세팅되면 OnMatchStateSet()을 통해 MatchState가 브로드 캐스트되고 서버와 클라이언트의 PlayerController에 있는 MatchState도 복제되어 전달된다.</br>
+
+```
+void ABlasterPlayerController::OnRep_MatchState()
+{
+	if (MatchState == MatchState::InProgress)
+	{
+		HandleMatchHasStarted();
+	}
+	else if (MatchState == MatchState::Cooldown)
+	{
+		HandleCooldown();
+	}
+}
+
+void ABlasterPlayerController::SetHUDTime()
+{
+	if (MatchState == MatchState::WaitingToStart) TimeLeft = WarmupTime - GetServerTime() + LevelStartingTime;
+	else if (MatchState == MatchState::InProgress) TimeLeft = WarmupTime + MatchTime - GetServerTime() + LevelStartingTime;
+	else if (MatchState == MatchState::Cooldown) TimeLeft = CooldownTime + WarmupTime + MatchTime - GetServerTime() + LevelStartingTime;
+
+	uint32 SecondsLeft = FMath::CeilToInt(TimeLeft);
+
+	if (HasAuthority())
+	{
+		BlasterGameMode = BlasterGameMode == nullptr ? Cast<ABlasterGameMode>(UGameplayStatics::GetGameMode(this)) : BlasterGameMode;
+		if (BlasterGameMode)
+		{
+			SecondsLeft = FMath::CeilToInt(BlasterGameMode->GetCountdownTime() + LevelStartingTime);
+		}
+	}
+
+	if (CountdownInt != SecondsLeft)
+	{
+		if (MatchState == MatchState::WaitingToStart || MatchState == MatchState::Cooldown)
+		{
+			SetHUDAnnouncementCountdown(TimeLeft);
+		}
+		
+		if (MatchState == MatchState::InProgress)
+		{
+			SetHUDMatchCountdown(TimeLeft);
+		}
+	}
+	
+	CountdownInt = SecondsLeft;
+}
+```
+
+복제된 MatchState는 각 상황에 맞는 HUD를 출력하고 HUD에 포함되어 있는 시간이 흐르도록 해줘야한다.</BR>
+Tick함수는 모든 HUD에 있는 시간을 계산하여 출력하는 SetHUDTime을 호출하고 SetHUDTime 함수는 각 MatchState에 맞는 시간을 계산하여 HUD에 출력한다.</BR>
+HandleCoolDown 함수는 최다 득점 플레이어를 찾아 HUD의 텍스트 블록에 출력하도록 해준다.</BR>
+최다 득점은 많은 플레이어를 죽인 플레이어로 플레이어를 죽이면 1점을 얻고 최다 득점자면 BlasterGameState 클래스에 있는 배열에 해당 플레이어를 넣어준다.</br>
+
+```
+void ABlasterGameMode::PlayerEliminated(class ABlasterCharacter* ElimmedCharacter, class ABlasterPlayerController* VictimController, ABlasterPlayerController* AttackerController)
+{
+	if (AttackerPlayerState && AttackerPlayerState != VictimPlayerState && BlasterGameState)
+	{
+		AttackerPlayerState->AddToScore(1.f);
+		BlasterGameState->UpdateTopScore(AttackerPlayerState);
+	}
+}
+
+void ABlasterGameState::UpdateTopScore(class ABlasterPlayerState* ScoringPlayer)
+{
+	// 최다 득점자 배열에 넣기
+
+	if (TopScoringPlayers.Num() == 0)
+	{
+		TopScoringPlayers.Add(ScoringPlayer);
+		TopScore = ScoringPlayer->GetScore();
+	}
+	else if (ScoringPlayer->GetScore() == TopScore)
+	{
+		// AddUnique: 중복 요소 제외
+		TopScoringPlayers.AddUnique(ScoringPlayer);
+	}
+	else if (ScoringPlayer->GetScore() > TopScore)
+	{
+		TopScoringPlayers.Empty();
+		TopScoringPlayers.AddUnique(ScoringPlayer);
+		TopScore = ScoringPlayer->GetScore();
+	}
+}
+```
+
+TopScoringPlayers 배열은 득점자의 PlayerState에서 득점자의 현재 점수를 최다 득점과 비교하여 배열에 넣는다.</br>
+게임이 종료 후 다른 플레이어도 TopScoringPlayers 배열을 통해 HUD에 최다 득점자를 출력해야하므로 복제 속성이 있어야한다.</BR>
+이렇게 구해진 최다 득점자는 HandleCooldown을 통해 HUD에 출력되게 된다.</BR>
+Cooldown 단계의 시간이 다 흐르면 RestartGame을 통해 서버가 게임 레벨로 다시 이동하고 게임을 새로 시작하여 모든 클래스의 모든 개체를 다시 생성하게 된다.</br>
+게임은 다시 WaitingToStart 단계가 되고 모든 개체를 다시 생성하는데 이 때 생성되는 플레이어들도 현재 게임의 MatchState와 대기 시간을 알아야한다.</br>
+이를 위해 PlayerController가 생성될 때 서버로 부터 게임의 MatchState와 대기 시간을 알아와야한다.</br>
+
+```
+void ABlasterPlayerController::ServerCheckMatchState_Implementation()
+{
+	ABlasterGameMode* GameMode = Cast<ABlasterGameMode>(UGameplayStatics::GetGameMode(this));
+	if (GameMode)
+	{
+		WarmupTime = GameMode->WarmupTime;
+		MatchTime = GameMode->MatchTime;
+		CooldownTime = GameMode->CooldownTime;
+		LevelStartingTime = GameMode->LevelStartingTime;
+		MatchState = GameMode->GetMatchState();
+
+		ClientJoinMidgame(MatchState, WarmupTime, MatchTime, CooldownTime, LevelStartingTime);
+	}
+}
+
+void ABlasterPlayerController::ClientJoinMidgame_Implementation(FName StateOfMatch, float Warmup, float Match, float Cooldown, float StartingTime)
+{
+	WarmupTime = Warmup;
+	MatchTime = Match;
+	CooldownTime = Cooldown;
+	LevelStartingTime = StartingTime;
+	MatchState = StateOfMatch;
+
+	OnMatchStateSet(MatchState);
+}
+```
+
+따라서 PlayerController의 BeginPlay에서 RPC 함수인 ServerCheckMatchState를 호출하여 서버 환경에서 게임 모드를 통해 MatchState와 각각의 대기 시간을 알아와서</br>
+클라이언트 측으로 RPC를 통해 정보를 넘기고 MatchState에 맞는 HUD를 출력하게 된다.</BR></BR>
+
+![cooldown](https://github.com/user-attachments/assets/0cfe4fad-7668-4948-8737-a1a8e61b790a)
+<div align="center"><strong>Cooldown 단계에서의 HUD</strong></div></BR></BR>
