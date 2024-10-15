@@ -2474,3 +2474,196 @@ void ABlasterPlayerController::ClientJoinMidgame_Implementation(FName StateOfMat
 
 ![cooldown](https://github.com/user-attachments/assets/0cfe4fad-7668-4948-8737-a1a8e61b790a)
 <div align="center"><strong>Cooldown 단계에서의 HUD</strong></div></BR></BR>
+
+## 총기 알고리즘 구현
+총기는 크게 나누자면 발사체를 총기에서 나가게하는 총과 발사체를 이용하지 않고 히트스캔 방식 총기가 있다.</br>
+전자는 대부분의 총에서 쓰이지만, 후자는 근접 무기나 스나이퍼 라이플에 주로 사용된다.</br>
+위에서 발사체 관련 총기를 다뤘다면 이번에는 히트스캔 방식 총을 다루고자 한다.</br></br>
+
+```
+void AHitScanWeapon::Fire(const FVector& HitTarget)
+{
+	FTransform SocketTransform = MuzzleFlashSocket->GetSocketTransform(GetWeaponMesh());
+	FVector Start = SocketTransform.GetLocation();
+
+	FHitResult FireHit;
+	WeaponTraceHit(Start, HitTarget, FireHit);
+	ABlasterCharacter* BlasterCharacter = Cast<ABlasterCharacter>(FireHit.GetActor());
+
+	if (BlasterCharacter && HasAuthority() && InstigatorController)
+	{
+		UGameplayStatics::ApplyDamage(
+			BlasterCharacter,
+			Damage,
+			InstigatorController,
+			this,
+			UDamageType::StaticClass()
+		);
+	}
+}
+
+void AHitScanWeapon::WeaponTraceHit(const FVector& TraceStart, const FVector& HitTarget, FHitResult& OutHit)
+{
+	FVector End = TraceStart + (HitTarget - TraceStart) * 1.25f;
+	
+	World->LineTraceSingleByChannel(
+		OutHit,
+		TraceStart,
+		End,
+		ECollisionChannel::ECC_Visibility
+	);
+
+	FVector BeamEnd = End;
+	if (OutHit.bBlockingHit)
+	{
+		BeamEnd = OutHit.ImpactPoint;
+	}
+}
+```
+
+히트스캔 방식 총은 총구로부터 조준하는 방향으로 라인트레이스를 하여 충돌체가 있으면 바로 데미지를 입힌다.</br>
+라인트레이스를 위해서는 총구의 위치인 SocketTransform과 총구로부터 조준 방향으로 라인트레이싱하여 부딪힌 대상 HitTarget을 다시 라인트레이싱하여 충돌 대상을 재확인한다.</br>
+재확인 결과는 FireHit에 저장되고 만약 FireHit이 BlasterCharacter로 캐스팅 된다면 캐릭터가 맞은것이니 데미지를 적용해준다.</br>
+발사체 무기와 차이점은 발사체를 스폰하지 않는 대신에 라인트레이싱을 한번 더 하여 맞은 대상에게 데미지를 입힌다.</br></br>
+
+샷건의 경우 탄을 쏘면 안에 있는 구슬들이 여러발 발사되는 형태이다.</br>
+탄안에 10개의 구슬이 있다면 10개의 구슬이 앞을 향해 다양한 방향으로 나아가야한다.</br>
+그렇다고 구슬이 여러 방향으로 중구난방으로 흩어지면 안되니 샷건 앞에 적정 거리를 두고 원을 만들어 원의 중심으로부터 랜덤한 거리를 두고 흩어지게 할 것이다.</br>
+
+```
+FVector AHitScanWeapon::TraceEndWithScatter(const FVector& TraceStart, const FVector& HitTarget)
+{
+	// 산탄총 트레이싱
+	FVector ToTargetNormalized = (HitTarget - TraceStart).GetSafeNormal(); // 방향벡터
+	FVector SphereCenter = TraceStart + ToTargetNormalized * DistanceToSphere;
+	
+	// 원 안에서 랜덤 거리
+	FVector RandVec = UKismetMathLibrary::RandomUnitVector() * FMath::FRandRange(0.f, SphereRadius);
+	FVector EndLoc = SphereCenter + RandVec; // 원에서의 탄환
+	FVector ToEndLoc = EndLoc - TraceStart; // 탄환이 뻗어나간 방향
+	
+	return FVector(TraceStart + ToEndLoc * TRACE_LENGTH / ToEndLoc.Size());
+}
+```
+
+트레이싱 과정에서 사용한 맞은 대상인 HitTarget과 총구 위치인 TraceStart를 이용해 방향벡터를 구한다.</br>
+총구로부터 적정 거리에 떨어져 있는 원의 위치인 SphereCenter를 계산해준다.</br>
+원은 총알이 나가는 방향으로 수직이고 랜덤한 방향 벡터와 랜덤한 반지름을 곱하여 각 구슬마다 원의 중심으로부터 얼마나 퍼질지 계산하여 해당 좌표를 EndLoc에 저장한다.</br>
+이제 마지막으로 총구로부터 Endloc까지의 벡터를 구해 구슬이 뻗어나갈 방향을 구해 각 구슬이 랜덤한 방향으로 뻗어나가게 된다.</br>
+
+```
+void AShotgun::Fire(const FVector& HitTarget)
+{
+	TMap<ABlasterCharacter*, uint32> HitMap;
+
+	for (uint32 i = 0; i < NumberOfScatters; i++)
+	{
+		FHitResult FireHit;
+		WeaponTraceHit(Start, HitTarget, FireHit);
+
+		// 탄환에 하나라도 맞았다면 맞은 횟수++, 아니라면 1회 피격
+		ABlasterCharacter* BlasterCharacter = Cast<ABlasterCharacter>(FireHit.GetActor());
+		if (BlasterCharacter && HasAuthority() && InstigatorController)
+		{
+			if (HitMap.Contains(BlasterCharacter))
+			{
+				HitMap[BlasterCharacter]++;
+			}
+			else
+			{
+				HitMap.Emplace(BlasterCharacter, 1);
+			}
+		}
+	}
+
+	// 피해자에게 피격된 탄수만큼 데미지 적용
+	for (auto HitPair : HitMap)
+	{
+		// 서버환경에서 데미지 적용
+		if (HitPair.Key && HasAuthority() && InstigatorController)
+		{
+			UGameplayStatics::ApplyDamage(
+				HitPair.Key, // 피격 대상
+				Damage * HitPair.Value, // 맞은 탄환 수
+				InstigatorController,
+				this,
+				UDamageType::StaticClass()
+			);
+		}
+	}
+
+}
+```
+
+구슬이 여러 방향으로 분산되면서 한 발에 여러명이 맞을 수 있다.</br>
+따라서 샷건은 한 발에 들어있는 구슬마다 맞은 대상을 기록해야하고 대상이 몇 개의 구슬에 맞았는지 알아야한다.</br>
+이를 위해서 Map을 이용하여 만약에 구슬에 맞았다면 맞은 대상을 키 값으로 Map에 저장하고 맞은 구슬만큼 카운트하여 값으로 넣는다.</br>
+구슬마다 라인트레이싱이 끝났다면 Map에 있는 캐릭터들에게 맞은 구슬만큼 데미지를 계산하여 한번에 피해를 입힌다.</br>
+각 구슬마다 ApplyDamage를 호출하는 것보다는 맵을 이용해 맞은 사람마다 호출하는 것이 효율적이라 생각해 이렇게 작성했다.</br></br>
+
+로켓 런처나 유탄 발사기는 발사체가 어딘가에 충돌하거나 일정 시간이 지나면 폭발하게 되면서 범위 피해를 입힌다.</br>
+특히 범위 피해는 언리얼 엔진에서 이미 ApplyRadialDamageWithFalloff 함수를 통해 지원하고 있다.</br>
+
+```
+void AProjectile::ExplodeDamage()
+{
+	if (FiringPawn && HasAuthority())
+	{
+		AController* FiringController = FiringPawn->GetController();
+		if (FiringController)
+		{
+			UGameplayStatics::ApplyRadialDamageWithFalloff(
+				this, 
+				Damage,
+				10.f,
+				GetActorLocation(),
+				DamageInnerRadius,
+				DamageOuterRadius,
+				1.f, // DamageFalloff
+				UDamageType::StaticClass(), 
+				TArray<AActor*>(),
+				this, 
+				FiringController 
+			);
+		}
+	}
+}
+```
+
+이 함수를 로켓 런처는 어딘가에 부딪힌다면 호출하고, 유탄 발사기는 사람에게 부딪히거나 안부딪힌다면 일정 시간 후에 폭발하도록 할 것이다.</br>
+
+```
+void AProjectileRocket::OnHit(UPrimitiveComponent* HitComp, AActor* OtherActor, UPrimitiveComponent* OtherComp, FVector NormalImpulse, const FHitResult& Hit)
+{
+	ExplodeDamage();
+}
+
+void AProjectileGrenade::BeginPlay()
+{
+	AActor::BeginPlay();
+	StartDestroyTimer();
+
+	ProjectileMovementComponent->OnProjectileBounce.AddDynamic(this, &AProjectileGrenade::OnBounce);
+}
+
+void AProjectileGrenade::OnBounce(const FHitResult& ImpactResult, const FVector& ImpactVelocity)
+{
+	if (Cast<ABlasterCharacter>(ImpactResult.GetActor()))
+	{
+		GetWorldTimerManager().ClearTimer(DestroyTimer);
+		Destroy();
+	}
+}
+
+void AProjectileGrenade::Destroyed()
+{
+	ExplodeDamage();
+	Super::Destroyed();
+}
+```
+
+로켓포의 경우 OnHit에서 간단하게 처리가 가능하지만 유탄의 경우 폭발물이 통통 튀어야 한다.</br>
+ProjectileMovementComponent에서는 발사체가 중력에 영향을 받고 바닥에 통통 튈지 결정해주는 bool 값이 있다.</br>
+bShouldBounce를 true로 하면 OnProjectileBounce라는 다이나믹 멀티캐스트 델리게이트를 이용할 수 있고 OnBounce를 콜백함수로 호출할 수 있다.
+OnBounce에서는 유탄이 사람에게 맞으면 바로 Destroy를 호출해 ExplodeDamage함수가 실행되도록 한다.</br>
+만약 사람에게 맞지 않는다면 BeginPlay에서 StartDestroyTimer를 호출해 일정 시간이 지나면 Destroy를 호출하도록한다.</br>
