@@ -2666,4 +2666,41 @@ void AProjectileGrenade::Destroyed()
 ProjectileMovementComponent에서는 발사체가 중력에 영향을 받고 바닥에 통통 튈지 결정해주는 bool 값이 있다.</br>
 bShouldBounce를 true로 하면 OnProjectileBounce라는 다이나믹 멀티캐스트 델리게이트를 이용할 수 있고 OnBounce를 콜백함수로 호출할 수 있다.
 OnBounce에서는 유탄이 사람에게 맞으면 바로 Destroy를 호출해 ExplodeDamage함수가 실행되도록 한다.</br>
-만약 사람에게 맞지 않는다면 BeginPlay에서 StartDestroyTimer를 호출해 일정 시간이 지나면 Destroy를 호출하도록한다.</br>
+만약 사람에게 맞지 않는다면 BeginPlay에서 StartDestroyTimer를 호출해 일정 시간이 지나면 Destroy를 호출하도록한다.</br></br>
+
+번외편으로 만약에 탄창을 갈아끼지 않고 탄알을 직접 갈아끼우는 로켓포나 일부 샷건의 경우 재장전을 하나씩 해주는 경우가 있다.</br>
+한 발씩 재장전을 하게 되면 총기에 넣을 수 있는 탄 수만큼 계속 재장전을 하게 되고 재장전에 시간이 걸리게 된다.</br>
+
+```
+void UCombatComponent::ShotgunShellReload()
+{
+	if (Character && Character->HasAuthority())
+	{
+		UpdateShotgunAmmoValues();
+	}
+}
+
+void UCombatComponent::UpdateShotgunAmmoValues()
+{
+	if (CarriedAmmoMap.Contains(EquippedWeapon->GetWeaponType()))
+	{
+		CarriedAmmoMap[EquippedWeapon->GetWeaponType()] -= 1;
+		CarriedAmmo = CarriedAmmoMap[EquippedWeapon->GetWeaponType()];
+	}
+
+	EquippedWeapon->AddAmmo(1);
+	bCanFire = true;
+
+	if (EquippedWeapon->IsFull() || CarriedAmmo == 0)
+	{
+		JumpToShotgunEnd();
+	}
+}
+```
+
+재장전 애니메이션에서 탄알을 총기에 넣을때마다 AnimNotify를 발생시켜 ShotgunShellReload를 호출한다.</br>
+Ammo는 복제 속성으로 서버 환경에서 Ammo값을 변경하면 클라이언트에게 복제가 되므로 서버 환경에서만 UpdateShotgunAmmoValues를 실행한다.</br>
+UpdateShotgunAmmoValues는 기존 재장전과 다르게 한 발씩 꺼내서 총기에 넣어주고 있으며, 재장전에 오래걸리는 만큼 1발이라도 재장전이 된다면 쏠 수 있게 해줬다.</br>
+이렇게 하면 원래는 4발을 장전해야할 것을 1발만 장전하고 애니메이션을 끊고 바로 격발을 할 수 있게 된다.</br>
+만약에 4발을 다 장전하지도 않았는데, 더 이상 장전할 수 없다면 장전 마무리하는 애니메이션으로 넘기게 된다.</br>
+애니메이션은 클라이언트 환경에서도 출력되야하므로 Ammo의 콜백 함수 OnRep_Ammo에서 JumpToShotgunEnd를 호출한다.</br></br>
