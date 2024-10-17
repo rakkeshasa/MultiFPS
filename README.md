@@ -3042,3 +3042,82 @@ void UCombatComponent::LocalFire(const FVector_NetQuantize& TraceHitTarget)
 	}
 }
 ```
+
+<STRONG><클라이언트측 예측 활용하기></STRONG></BR>
+총을 쏘다가 탄창에 있는 탄을 다 쏘면 ReloadEmptyWeapon을 호출하여 자동적으로 재장전이 되도록했다.</br>
+하지만 서버와 클라이언트간의 지연 시간이 길다면 어떻게될까?</br>
+Ammo는 복제 속성으로 서버에서 관리하고 Ammo의 값이 달라진다면 그 값을 복제하여 클라이언트에게 다시 전달한다.</br>
+플레이어가 총알을 다 소비해서 서버가 체크하고 다시 클라이언트에게 전달하는 사이에 ReloadEmptyWeapon가 호출이 된다.</br>
+Ammo는 복제 속성이지만 ReloadEmptyWeapon이 호출되는 환경은 서버 환경이 아닌 자신이 조종중인 환경이면 호출되기 때문이다.</br>
+
+```
+void UCombatComponent::ReloadEmptyWeapon()
+{
+	if (EquippedWeapon && EquippedWeapon->IsEmpty())
+	{
+		Reload();
+	}
+}
+```
+
+ReloadEmptyWeapon을 살펴보면 장착한 총의 탄알이 다 떨어졌는지 체크하고 재장전을 해주고 있다.</br>
+아쉽게도 서버와 클라이언트간의 딜레이가 커서 서버 상에서는 아직 탄알이 0개가 되지 않은 상태라하면 IsEmpty()는 false를 응답하고 재장전은 이루어지지 않는다.</br>
+이것을 해결하기 위해 클라이언트는 탄알이 0개가 됐다는 것을 예측하고 재장전이 되도록 해주고자 한다.</br>
+
+```
+void AWeapon::Fire(const FVector& HitTarget)
+{
+	SpendAmmo();
+}
+
+void AWeapon::SpendAmmo()
+{
+	Ammo = FMath::Clamp(Ammo - 1, 0, MagCapacity);
+	SetHUDAmmo();
+}
+```
+
+SpendAmmo는 총을 격발하면 실행되는 함수로 총알을 1개씩 빼주고 있다.</br>
+기존에는 HasAuthority를 통해 서버환경에서만 SpendAmmo를 실행하고 복제된 Ammo를 클라이언트에게 보냈지만, 이제는 클라이언트에서도 SpendAmmo를 실행할 수 있다.</br>
+이렇게 되면 HUD상에서 출력되는 탄환이 소모됐다가 다시 충전됐다가 다시 소모돼는것을 알 수 있다.</BR>
+이를 방지하기 위해 <strong>서버측 재조정 (Server reconciliation)</strong>을 적용해줄 것이다.</br>
+그러기 위해서는 Ammo는 더 이상 Replicate 속성을 갖지 않고 RPC를 이용해 처리해줄 것이다.</BR>
+탄알은 쏠 때 호출되는 SpendAmmo와 재장전으로 재충전 될 때 호출되는 AddAmmo로만 바뀌며 이 상황만 케어해주면 된다.</BR>
+
+```
+void AWeapon::SpendAmmo()
+{
+	// 탄알 소모 관리
+	Ammo = FMath::Clamp(Ammo - 1, 0, MagCapacity);
+	SetHUDAmmo();
+
+	if (HasAuthority())
+	{
+		ClientUpdateAmmo(Ammo);
+	}
+	else if (BlasterOwnerCharacter && BlasterOwnerCharacter->IsLocallyControlled())
+	{
+		++Sequence;
+	}
+}
+
+void AWeapon::ClientUpdateAmmo_Implementation(int32 ServerAmmo)
+{
+	if (HasAuthority()) return;
+
+	// 서버의 응답에 맞춤
+	Ammo = ServerAmmo;
+	--Sequence;
+
+	// 재조정 (n발을 더 소모했는데, 아직 서버에서 응답이 안옴)
+	Ammo -= Sequence;
+	SetHUDAmmo();
+}
+```
+
+탄을 소모하는 SpendAmmo는 이제 클라이언트 환경에서도 실행이 되어 자신의 Ammo값을 예측하여 가지고 있을 수 있다.</br>
+클라이언트는 SpendAmmo를 통해 탄을 소모한 뒤의 Ammo값을 예측하고 예측한 Ammo값 만큼 서버로부터 응답을 받으면 되므로 Sequence를 1개씩 증가시켜준다.</br>
+서버에서는 클라이언트가 탄을 쏠 때마다 SpendAmmo를 통해 서버 환경에서 Ammo값을 계산하고 더 이상 복제되지 않으므로 ClientUpdateAmmo RPC를 호출한다.</BR>
+ClientUpdateAmmo는 클라이언트 환경에서 실행되는 함수로 서버측 Ammo값과 자신의 Ammo값을 비교하여 서버에 맞춰 수정을 해준다.</br>
+아직 서버에서 호출하지 않은 ClientUpdateAmmo만큼 수정된 Ammo값에 빼서 서버측 재조정 (Server reconciliation)을 해준다.</br>
+이렇게하면 동기화문제도 해결되는 동시에 Ammo값이 서버값에 맞추기 위해 빼졌다가 더해졌다가하는 현상이 없어지게 된다.</br>
