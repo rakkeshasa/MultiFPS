@@ -2706,6 +2706,120 @@ UpdateShotgunAmmoValues는 기존 재장전과 다르게 한 발씩 꺼내서 �
 애니메이션은 클라이언트 환경에서도 출력되야하므로 Ammo의 콜백 함수 OnRep_Ammo에서 JumpToShotgunEnd를 호출한다.</br></br>
 
 ## 아이템 구현
+탄약 상자 구현</br>
+
+```
+void AAmmoPickup::OnSphereOverlap(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult)
+{
+	UCombatComponent* Combat = BlasterCharacter->GetCombat();
+	if (Combat)
+	{
+		Combat->PickupAmmo(WeaponType, AmmoAmount);
+	}
+
+	Destroy();
+}
+
+void UCombatComponent::PickupAmmo(EWeaponType WeaponType, int32 AmmoAmount)
+{
+	if (CarriedAmmoMap.Contains(WeaponType))
+	{
+		CarriedAmmoMap[WeaponType] = FMath::Clamp(CarriedAmmoMap[WeaponType] + AmmoAmount, 0, MaxCarriedAmmo);
+		UpdateCarriedAmmo();
+	}
+}
+
+void UCombatComponent::UpdateCarriedAmmo()
+{
+	if (CarriedAmmoMap.Contains(EquippedWeapon->GetWeaponType()))
+	{
+		CarriedAmmo = CarriedAmmoMap[EquippedWeapon->GetWeaponType()];
+	}
+
+	Controller = Controller == nullptr ? Cast<ABlasterPlayerController>(Character->Controller) : Controller;
+	if (Controller)
+	{
+		Controller->SetHUDCarriedAmmo(CarriedAmmo);
+	}
+}
+```
+탄약 상자는 캐릭터와 충돌이 일어날 시 CombatComponent의 PickupAmmo를 호출한다.</br>
+PickupAmmo는 캐릭터가 가지고 있는 탄약에 주운 탄약만큼 더해주는데 무기 타입마다 탄약이 다르므로 입력으로 무기의 타입과 탄약의 양을 입력받는다.</br>
+입력받은 무기 타입은 Map타입인 CarreidAmmoMap에 존재하는지 확인하고 탄약을 더 해준 후 UpdateCarriedAmmo를 통해 HUD에 출력을 해준다.</BR></BR>
+
+캐릭터에게 힐이나 쉴드를 주거나 이동속도를 높이는 버프를 줄 수도 있다.</BR>
+이러한 버프류는 캐릭터의 스펙에 영향을 주기 때문에 버프와 관련된 코드는 Character 클래스가 아닌 따로 BuffComponent 클래스에서 처리해줬다.</br>
+우선은 힐킷도 바닥에 떨어져 있는 아이템으로 Pickup 클래스를 상속받아 힐킷을 만들고 충돌 시 BuffComponent의 함수에서 처리를 해준다.</br>
+
+```
+void AHealthPickup::OnSphereOverlap(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult)
+{
+	UBuffComponent* Buff = BlasterCharacter->GetBuff();
+	if (Buff)
+	{
+		Buff->InstantHeal(HealAmount);
+	}
+
+	Destroy();
+}
+
+void UBuffComponent::InstantHeal(float HealAmount)
+{
+	if (Character == nullptr || Character->IsElimmed()) return;
+
+	Character->SetHealth(FMath::Clamp(Character->GetHealth() + HealAmount, 0.f, Character->GetMaxHealth()));
+	Character->UpdateHUDHealth();
+}
+```
+힐킷을 먹으면 OnSpherOverlap에서 BuffComponent의 InstantHeal함수를 호출하고 InstantHeal은 현재 체력에 힐량만큼 더 해 Health를 세팅해준다.</br>
+Health는 복제 속성으로 값이 변경되면 OnRep_Health 콜백 함수가 실행되고 클라이언트 화면에서도 HUD가 업데이트되게 된다.</BR></BR>
+
+이러한 아이템 류는 한번 먹으면 맵에서 사라지는게 아니라 일정 시간 뒤에 다시 스폰되야한다.</br>
+이럴 때는 타이머를 이용해서 일정 시간이 지나면 다시 소환되게 할 것이다.</br>
+그렇다면 이 타이머를 언제 작동시키나 확인을 해야하는데, PickUp 클래스는 OnSphereOverlap에서 Destroy를 호출하므로 파괴가 될때 타이머를 작동시키면된다.</br>
+
+```
+void APickupSpawnPoint::BeginPlay()
+{
+	StartSpawnPickupTimer((AActor*)nullptr);
+}
+void APickupSpawnPoint::SpawnPickup()
+{
+	int32 NumPickupClasses = PickupClasses.Num();
+	if (NumPickupClasses > 0)
+	{
+		int32 Selection = FMath::RandRange(0, NumPickupClasses - 1);
+		SpawnedPickup = GetWorld()->SpawnActor<APickup>(PickupClasses[Selection], GetActorTransform());
+		
+		if (HasAuthority() && SpawnedPickup)
+		{
+			SpawnedPickup->OnDestroyed.AddDynamic(this, &APickupSpawnPoint::StartSpawnPickupTimer);
+		}
+	}
+}
+
+void APickupSpawnPoint::StartSpawnPickupTimer(AActor* DestroyedActor)
+{
+	const float SpawnTime = FMath::FRandRange(SpawnPickupTimeMin, SpawnPickupTimeMax);
+
+	GetWorldTimerManager().SetTimer(
+		SpawnPickupTimer,
+		this,
+		&APickupSpawnPoint::SpawnPickupTimerFinished,
+		SpawnTime
+	);
+}
+
+void APickupSpawnPoint::SpawnPickupTimerFinished()
+{
+	SpawnPickup();
+}
+```
+TArray형 PickupClasses에는 다양한 버프류(힐, 쉴드, 이속버프 등)이 들어갈 수 있게 하여 랜덤한 버프가 돌아가면서 스폰되도록 했다.</br>
+해당 버프들이 월드에 스폰되면서 OnDestryoed 델리게이트가 바인딩되며, 캐릭터가 버프를 먹으면 Destroy되어 StartSpawnPickupTimer 함수를 호출하게 된다.</br>
+StartSpawnPickupTimer는 버프 재소환 타이머가 실질적으로 작동하는 함수로 지정된 시간내로 랜덤한 타이머가 작동되고 타이머가 끝나면 다시 SpawnPickup을 통해 버프를 재소환하게 된다.</br>
+만약 랜덤 버프가 아니라 힐킷만 소환되게 하고 싶다면 PickupClasses에 HealthPickup만 등록하면된다.</br></br>
+
 
 ## 멀티플레이 지연 관련 대처법
 캐릭터를 움직이려면 플레이어 입장에서는 키를 하나 누르면 되지만, 네트워크에서는 클라이언트가 서버측으로 요청을 보내고 서버는 캐릭터를 해당 위치로 옮기고 다른 클라이언트에게 전송한다.</br>
