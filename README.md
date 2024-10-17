@@ -2856,4 +2856,162 @@ StartSpawnPickupTimer는 버프 재소환 타이머가 실질적으로 작동하
 Server-Side Rewind는 서버가 클라이언트로부터 받은 입력을 처리할 때, 해당 입력이 발생했던 시점의 게임 상태로 "되돌아간다"고 가정하여 처리하는 방식이다.</br>
 클라이언트가 누군가를 맞히면 서버한테 이를 알리고 서버는 시간을 되돌려 총알이 명중했는지 체크를 하고 보상을 부여하여 클라이언트에게는 지연이 없는것처럼하는 것이다.</br>
 하지만 과거 시점의 플레이어를 향해 총을 쏘고 있기 때문에 상대방이 엄폐물에 숨으려고 달리는 동안에도 맞힐 수 있어, 상대가 엄폐물에 숨었어도 총에 맞을 수 있다.</br>
-따라서 SSR은 높은 핑을 가진 플레이어에게 플레이 경험을 향상시키지만 다른 플레이어들에게는 악영향을 입힌다.</BR>
+따라서 SSR은 높은 핑을 가진 플레이어에게 플레이 경험을 향상시키지만 다른 플레이어들에게는 악영향을 입힌다.</BR></BR>
+
+<strong>산탄총 궤적 관련</strong></br>
+
+이전 코드
+```
+void UCombatComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+{
+	if (Character && Character->IsLocallyControlled())
+	{
+		FHitResult HitResult;
+		TraceUnderCrosshairs(HitResult);
+		HitTarget = HitResult.ImpactPoint;
+	}
+}
+
+void UCombatComponent::Fire()
+{
+	if (CanFire())
+	{
+		bCanFire = false;
+		// 서버에서만 처리 -> 클라에게서는 효과가 없음
+		ServerFire(HitTarget)
+	}
+}
+
+void UCombatComponent::MulticastFire_Implementation(const FVector_NetQuantize& TraceHitTarget)
+{
+	if (Character && CombatState == ECombatState::ECS_Reloading && EquippedWeapon->GetWeaponType() == EWeaponType::EWT_Shotgun)
+	{
+		Character->PlayFireMontage(bAiming);
+		EquippedWeapon->Fire(TraceHitTarget);
+		CombatState = ECombatState::ECS_Unoccupied; // 재장전상태 해제
+		return;
+	}
+
+	if (Character && CombatState == ECombatState::ECS_Unoccupied)
+	{
+		Character->PlayFireMontage(bAiming);
+		EquippedWeapon->Fire(TraceHitTarget);
+	}
+}
+
+void AHitScanWeapon::Fire(const FVector& HitTarget)
+{
+	Super::Fire(HitTarget);
+
+	if (MuzzleFlashSocket)
+	{
+		FTransform SocketTransform = MuzzleFlashSocket->GetSocketTransform(GetWeaponMesh());
+		FVector Start = SocketTransform.GetLocation();
+
+		FHitResult FireHit;
+		WeaponTraceHit(Start, HitTarget, FireHit);
+		
+		ABlasterCharacter* BlasterCharacter = Cast<ABlasterCharacter>(FireHit.GetActor());
+
+		// 서버 환경에서만 데미지 적용
+		if (BlasterCharacter && HasAuthority() && InstigatorController)
+		{
+			UGameplayStatics::ApplyDamage();
+		}
+	}
+}
+
+void AHitScanWeapon::WeaponTraceHit(const FVector& TraceStart, const FVector& HitTarget, FHitResult& OutHit)
+{
+	UWorld* World = GetWorld();
+	if (World)
+	{
+		FVector End = EquippedWeapon->bUseScatter ? EquippedWeapon->TraceEndWithScatter(HitTarget) : TraceStart + (HitTarget - TraceStart) * 1.25f;
+		
+		World->LineTraceSingleByChannel();
+
+		FVector BeamEnd = End;
+		if (OutHit.bBlockingHit)
+		{
+			BeamEnd = OutHit.ImpactPoint;
+		}
+	}
+}
+
+FVector AWeapon::TraceEndWithScatter(const FVector& HitTarget)
+{
+	FTransform SocketTransform = MuzzleFlashSocket->GetSocketTransform(GetWeaponMesh());
+	FVector TraceStart = SocketTransform.GetLocation();
+
+	FVector ToTargetNormalized = (HitTarget - TraceStart).GetSafeNormal(); // 방향벡터
+	FVector SphereCenter = TraceStart + ToTargetNormalized * DistanceToSphere;
+
+	// 원 안에서 랜덤 거리
+	FVector RandVec = UKismetMathLibrary::RandomUnitVector() * FMath::FRandRange(0.f, SphereRadius);
+	FVector EndLoc = SphereCenter + RandVec; // 원에서의 탄환
+	FVector ToEndLoc = EndLoc - TraceStart; // 탄환이 뻗어나간 방향
+
+	return FVector(TraceStart + ToEndLoc * TRACE_LENGTH / ToEndLoc.Size());
+}
+```
+
+이후 코드
+
+```
+void UCombatComponent::Fire()
+{
+	if (CanFire())
+	{
+		bCanFire = false;
+
+		// 서버에서만 처리 -> 클라에게서는 효과가 없음
+		if (EquippedWeapon)
+		{
+			CrosshairShootingFactor = .75f;
+
+			switch (EquippedWeapon->FireType)
+			{
+			case EFireType::EFT_Projectile:
+				FireProjectileWeapon();
+				break;
+			case EFireType::EFT_HitScan:
+				FireHitScanWeapon();
+				break;
+			case EFireType::EFT_Shotgun:
+				FireShotgun();
+				break;
+			}
+		}
+	}
+}
+
+void UCombatComponent::FireHitScanWeapon()
+{
+	if (EquippedWeapon)
+	{
+		HitTarget = EquippedWeapon->bUseScatter ? EquippedWeapon->TraceEndWithScatter(HitTarget) : HitTarget;
+		LocalFire(HitTarget);
+		ServerFire(HitTarget);
+	}
+}
+
+void UCombatComponent::LocalFire(const FVector_NetQuantize& TraceHitTarget)
+{
+	// 원래는 MulticastFire에서 하던 것
+	if (EquippedWeapon == nullptr) return;
+
+	if (Character && CombatState == ECombatState::ECS_Reloading && EquippedWeapon->GetWeaponType() == EWeaponType::EWT_Shotgun)
+	{
+		Character->PlayFireMontage(bAiming);
+		EquippedWeapon->Fire(TraceHitTarget);
+		CombatState = ECombatState::ECS_Unoccupied;
+		return;
+	}
+
+	if (Character && CombatState == ECombatState::ECS_Unoccupied)
+	{
+		Character->PlayFireMontage(bAiming);
+		EquippedWeapon->Fire(TraceHitTarget);
+	}
+}
+```
