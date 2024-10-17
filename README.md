@@ -3121,3 +3121,4 @@ void AWeapon::ClientUpdateAmmo_Implementation(int32 ServerAmmo)
 ClientUpdateAmmo는 클라이언트 환경에서 실행되는 함수로 서버측 Ammo값과 자신의 Ammo값을 비교하여 서버에 맞춰 수정을 해준다.</br>
 아직 서버에서 호출하지 않은 ClientUpdateAmmo만큼 수정된 Ammo값에 빼서 서버측 재조정 (Server reconciliation)을 해준다.</br>
 이렇게하면 동기화문제도 해결되는 동시에 Ammo값이 서버값에 맞추기 위해 빼졌다가 더해졌다가하는 현상이 없어지게 된다.</br>
+참고로 클라가 쏜 Ammo를 어떻게 서버가 확인하는가에 대해 궁금하다면 Weapon은 복제속성을 갖고 있다.</br></br>
