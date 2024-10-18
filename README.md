@@ -3159,6 +3159,103 @@ bAimButtonPressed는 자신이 캐릭터를 조종중인 환경에서 bAiming이
 bAiming은 복제 속성으로 서버에서 bAiming 값을 설정하면 클라이언트에 전달하여 동기화문제를 처리하기 위해 수정을 한다.</br>
 원래라면 클라이언트가 두 번의 복제를 서버에게 전달받고 조준을 풀었음에도 다시 조준이 됐다가 풀려야한다.</br>
 하지만 ServerSetAiming(true) RPC에 대한 복제를 전달받을 때, 클라이언트는 OnRep_Aiming을 통해 자신의 환경에서 마지막으로 설정한 bAimButtonPressed값 false를 true값 대신에 설정하기 때문에 조준이 2번 일어나지 않는다.</br>
-마지막으로 ServerSetAiming(false) RPC에 대한 응답이 왔을 때는 클라이언트는 이미 true가 왔을 때 false로 설정했으므로 아무 작업도 수행되지 않는다.</br>
+마지막으로 ServerSetAiming(false) RPC에 대한 응답이 왔을 때는 클라이언트는 이미 true가 왔을 때 false로 설정했으므로 아무 작업도 수행되지 않는다.</br></br>
 
+이제는 높은 지연 환경에서도 총을 쏘면 탄환이 즉각적으로 HUD에 업데이트 되고, 조준버튼에 대한 기능도 바로 실행되지만 아직 재장전에 대해서는 처리되지 않았다.</BR>
 
+```
+void UCombatComponent::Reload()
+{
+	if (CarriedAmmo > 0 && CombatState == ECombatState::ECS_Unoccupied && EquippedWeapon && !EquippedWeapon->IsFull())
+	{
+		ServerReload();
+	}
+}
+
+void UCombatComponent::ServerReload_Implementation()
+{
+	CombatState = ECombatState::ECS_Reloading;
+	HandleReload();
+}
+
+void UCombatComponent::OnRep_CombatState()
+{
+	switch (CombatState)
+	{
+	case ECombatState::ECS_Reloading:
+		HandleReload();
+		break;
+	}
+}
+```
+
+재장전 키를 누르면 클라이언트 환경에서 Reload가 호출되지만 ServerReload RPC를 호출하면서 지연이 발생된다.</BR>
+ServerReload에서는 HandleReload함수를 통해 서버환경에서 재장전 애니메이션을 출력한다.</br>
+클라이언트는 ServerReload에서 CombatState를 세팅해주고 복제가 되면서 OnRep_CombatState()에서 HandleReload()를 호출하여 애니메이션을 출력한다.</br>
+이는 RPC를 한 번 거치고 클라이언트에서 애니메이션이 출력되므로 지연이 높은 환경에서는 애니메이션이 늦게 출력되게 되는 결과를 초래한다.</BR></BR>
+
+따라서 애니메이션은 재장전 버튼이 누르면 호출되는 Reload에서 출력이 되게 해줘야한다.</br>
+
+```
+void UCombatComponent::Reload()
+{
+	if (CarriedAmmo > 0 && CombatState == ECombatState::ECS_Unoccupied && EquippedWeapon && !EquippedWeapon->IsFull())
+	{
+		ServerReload();
+		HandleReload();
+		bLocallyReloading = true;
+	}
+}
+
+void UCombatComponent::ServerReload_Implementation()
+{
+	CombatState = ECombatState::ECS_Reloading;
+	if (!Character->IsLocallyControlled()) HandleReload();
+}
+
+void UCombatComponent::OnRep_CombatState()
+{
+	switch (CombatState)
+	{
+	case ECombatState::ECS_Reloading:
+		if (Character && !Character->IsLocallyControlled()) HandleReload();
+		break;
+	}
+}
+
+bool UCombatComponent::CanFire()
+{
+	if (EquippedWeapon == nullptr) return false;
+	if (bLocallyReloading) return false;
+
+	return !EquippedWeapon->IsEmpty() && bCanFire && CombatState == ECombatState::ECS_Unoccupied;
+}
+```
+
+Reload에서 바로 HandleReload를 호출하여 애니메이션이 즉각적으로 호출되게 했으며, 재장전 애니메이션이 2번 재생되지 않도록 다른 함수에서는 ``` !Character->IsLocallyControlled() ``` 조건을 걸었다.</br>
+또한 재장전 중에는 총이 격발되면 안되므로 클라이언트 환경에서 재장전중일때는 bLocallyReloading이 true값이 되어 격발이 될 수 없도록 했다.</br>
+클라이언트환경의 애니메이션 블루프린트에서 호출되는 FinishReloading에서 bLocallyReloading은 false값이 되어 재장전이 끝나면 격발이 되게 하였다.</br></br>
+
+지연상태에서 상대 플레이어를 맞힌다는 것은 생각보다 복잡하다.</BR>
+지연시간이 1초가 걸린다고 생각하고 상대 플레이어가 (0, 0)에서 부터 움직인다고 가정해보자.</BR>
+상대 플레이어는 캐릭터를 (1, 0)으로 움직였지만 서버와 내 화면에서는 아직 움직이지 않았다.</BR>
+1초 뒤, 상대 플레이어는 멈추지 않고 계속해서 나아가 (2, 0)에 도달하고, 서버는 상대 플레이어가 (1, 0)에 있다는 것을 확인했다. 아직 내 화면에서는 상대 플레이어가 (0, 0)에 있다.</BR>
+2초인 상황에서 상대는 (3, 0)에 도착했고, 서버는 (2, 0)에 플레이어가 있고 내 화면에서는 상대 플레이어가 (1, 0)으로 움직였다는 것을 확인했다.</BR>
+3초가 되기 전에 나는 상대가 앞으로 계속 움직일 것이라고 생각하고 (2, 0)의 위치에 조준하고 상대가 오면 쏠 것이다.</BR>
+3초가 되면, 상대는 (4, 0)으로 가있고, 서버 환경에서는 (3, 0), 내 화면에서는 (2, 0)에 있어 상대를 쏘고 서버한테 상대를 맞혔다는 정보를 보낸다.</BR>
+4초일 때, 상대는 (5, 0), 서버 환경은 (4, 0)이며 내가 상대를 맞혔다는 정보를 접수하게 된다.</BR>
+서버는 3초일 때 상황으로 되돌려 내가 정말 상대를 맞췄는지 확인하지만, 내 화면에서는 (2, 0)에 있었고 서버 환경에서는 (3, 0)에 있었으므로 맞지 않았다는 판정을 내린다.</BR>
+분명 내 화면에서는 상대를 맞췄지만, 지연으로 인해 서버는 상대를 맞추지 못했다고 판단을 하게 된다</BR>
+이러한 문제점을 해결하는 것이 서버측 되감기인 Server-Side Rewind(SSR) 이다.</BR></BR>
+
+그렇다면 Server-Side Rewind(SSR)을 적용해서 다시 상대 플레이어를 맞힌다고 생각해보자.</br>
+3초일 때, 상대는 (4, 0)에 있고 서버에서는 (3, 0) 그리고 내 화면에서는 (2, 0)에 있으며 내가 상대 플레이어를 향해 총을 쏴서 맞힌 순간이다.</br>
+나는 서버한테 3초에서 내가 상대를 타격했다는 정보를 보내고, 4초일 때 서버는 타격에 대한 정보를 받게 된다.</br>
+서버는 정보를 받고 내가 요청을 보내서 서버가 받는데 걸린 시간까지 고려하여 상대의 캐릭터가 어디에 있었는지 정확히 계산해낸다.</BR>
+이렇게 하면 내 화면에서 상대가 어디에 위치했는지 알 수 있고, 해당 위치에서 라인 트레이싱을 진행하여 정말 맞았는지 확인할 수 있다.</BR></BR>
+
+지연이 있는 상황에서 SSR을 이용해 상대방을 타격하는 방법을 살펴봤다.</BR>
+하지만 이 방법은 내가 과거의 캐릭터를 때린다는 점에서 허점이 존재한다.</BR>
+4초인 상황에서 만약 상대의 위치인 (5, 0)에 엄폐물이 있었다면 어떻게 될까?</BR>
+서버는 그저 3초인 상황에서 내 화면에 있는 상대의 위치만을 파악하여 타격을 줄지 말지만 확인하고 현재 4초인 상황에서 상대 플레이어가 엄폐물에 숨든 말든 타격을 줄 것이다.</BR>
+이는 심각한 문제로 플레이어가 엄폐물에 숨었는데도 총에 맞는 것은 FPS에서 좋은 경험은 아니다. 이러한 이유로 SSR을 사용할 시기와 조건을 정해야 한다.</BR>
