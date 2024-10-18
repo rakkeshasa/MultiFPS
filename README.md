@@ -3122,3 +3122,43 @@ ClientUpdateAmmo는 클라이언트 환경에서 실행되는 함수로 서버�
 아직 서버에서 호출하지 않은 ClientUpdateAmmo만큼 수정된 Ammo값에 빼서 서버측 재조정 (Server reconciliation)을 해준다.</br>
 이렇게하면 동기화문제도 해결되는 동시에 Ammo값이 서버값에 맞추기 위해 빼졌다가 더해졌다가하는 현상이 없어지게 된다.</br>
 참고로 클라가 쏜 Ammo를 어떻게 서버가 확인하는가에 대해 궁금하다면 Weapon은 복제속성을 갖고 있다.</br></br>
+
+높은 핑 환경에서 빠르게 조준을 했다가 해제하면 조준이 2번 되는 문제점이 발견됐다.</br>
+이 현상도 클라이언트가 조준했다는 것을 서버에 알리지만 바로 조준을 해제해버리고 그 이후에 서버가 클라이언트는 조준중이다라는 응답을 보내 조준이 2번이 되는 것이다.</br>
+bAiming이 복제가 되면 조준 버튼이 계속 누르는 중인지 확인해야한다.</br>
+
+```
+void UCombatComponent::SetAiming(bool bIsAiming)
+{
+	bAiming = bIsAiming;
+	ServerSetAiming(bIsAiming);
+	if (Character->IsLocallyControlled()) bAimButtonPressed = bIsAiming;
+}
+
+void UCombatComponent::ServerSetAiming_Implementation(bool bIsAiming)
+{
+	bAiming = bIsAiming;
+	if (Character)
+	{
+		Character->GetCharacterMovement()->MaxWalkSpeed = bIsAiming ? AimWalkSpeed : BaseWalkSpeed;
+	}
+}
+
+void UCombatComponent::OnRep_Aiming()
+{
+	if (Character && Character->IsLocallyControlled())
+	{
+		bAiming = bAimButtonPressed;
+	}
+}
+```
+
+bAimButtonPressed는 자신이 캐릭터를 조종중인 환경에서 bAiming이 유지중인지 체크하기 위한 변수로, 서버측 bAiming으로 클라이언트를 되돌리고 다시 재조정을 하기 위해 필요하다.</br>
+조준 버튼을 빠르게 눌렀다 떼면 클라이언트가 조준 버튼을 눌러 bAiming이 true가 되고 ServerSetAiming(true) RPC을 호출한다.</BR>
+다시 bAiming은 false가 되고 ServerSetAiming(false) RPC를 호출하게 되고, 서버는 순차적으로 2개의 RPC를 받고 처리한다.</BR>
+bAiming은 복제 속성으로 서버에서 bAiming 값을 설정하면 클라이언트에 전달하여 동기화문제를 처리하기 위해 수정을 한다.</br>
+원래라면 클라이언트가 두 번의 복제를 서버에게 전달받고 조준을 풀었음에도 다시 조준이 됐다가 풀려야한다.</br>
+하지만 ServerSetAiming(true) RPC에 대한 복제를 전달받을 때, 클라이언트는 OnRep_Aiming을 통해 자신의 환경에서 마지막으로 설정한 bAimButtonPressed값 false를 true값 대신에 설정하기 때문에 조준이 2번 일어나지 않는다.</br>
+마지막으로 ServerSetAiming(false) RPC에 대한 응답이 왔을 때는 클라이언트는 이미 true가 왔을 때 false로 설정했으므로 아무 작업도 수행되지 않는다.</br>
+
+
